@@ -1,0 +1,9 @@
+Meowgent
+Copyright 2026 JSonJh (https://github.com/jasonwpgml)
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+The cat (pet/ submodule: behaviour, voice and sprite art) is NOT covered by this license;
+it is proprietary and is distributed only in compiled, encrypted form inside the released app.
+
+Third-party works included or referenced (fonts, referenced MIT/0BSD code, CC BY photo
+credits for sprite references) are listed in collector/LICENSES.md.

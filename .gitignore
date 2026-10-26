@@ -1,0 +1,10 @@
+assets/vendor/
+.build/
+*.db
+.DS_Store
+__pycache__/
+collector/.build/
+collector/dist/
+# 비공개 고양이 저장소(pet/ 서브모듈)로 가는 링크 (setup-pet.sh 가 만든다)
+collector/Sources/ActLog/Pet
+assets/original-cat

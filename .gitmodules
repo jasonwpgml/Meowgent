@@ -1,0 +1,3 @@
+[submodule "pet"]
+	path = pet
+	url = git@github.com:jasonwpgml/meowgent-pet.git

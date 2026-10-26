@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>io.github.jasonwpgml.meowgent</string>
+    <key>CFBundleName</key><string>Meowgent</string>
+    <key>CFBundleDisplayName</key><string>Meowgent</string>
+    <key>CFBundleExecutable</key><string>Meowgent</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>0.2.0</string>
+    <key>CFBundleVersion</key><string>2</string>
+    <key>CFBundleDevelopmentRegion</key><string>ko</string>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSUIElement</key><true/>
+    <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+    <key>NSHumanReadableCopyright</key><string>© 2026 JSonJh</string>
+    <key>NSAppleEventsUsageDescription</key><string>브라우저에서 지금 보고 있는 페이지 주소를 읽어 고양이가 상황을 알게 하기 위해 필요합니다. 기록을 끄면 저장하지 않습니다.</string>
+</dict>
+</plist>
