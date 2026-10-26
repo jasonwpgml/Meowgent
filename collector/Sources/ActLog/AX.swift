@@ -22,6 +22,16 @@ enum AX {
         return (v as? NSNumber)?.intValue
     }
 
+    /// 여러 속성을 한 번의 왕복으로 (메뉴 색인처럼 노드마다 여럿 물을 때 IPC 를 1/n 로). 없거나 못 읽은 자리는 nil
+    static func values(_ el: AXUIElement, _ attrs: [String]) -> [CFTypeRef?] {
+        var arr: CFArray?
+        guard AXUIElementCopyMultipleAttributeValues(el, attrs as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &arr) == .success,
+              let a = arr as? [CFTypeRef], a.count == attrs.count else { return Array(repeating: nil, count: attrs.count) }
+        return a.map { v in
+            CFGetTypeID(v) == AXValueGetTypeID() && AXValueGetType(v as! AXValue) == .axError ? nil : v
+        }
+    }
+
     static func children(_ el: AXUIElement) -> [AXUIElement] {
         var v: CFTypeRef?
         guard AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &v) == .success,

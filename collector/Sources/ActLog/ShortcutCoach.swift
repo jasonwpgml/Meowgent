@@ -9,6 +9,9 @@ final class MenuIndex {
     private var waiting: [pid_t: [([MenuShortcut]) -> Void]] = [:]
     private let queue = DispatchQueue(label: "actlog.menus", qos: .utility)
 
+    /// 이 앱 메뉴를 한 번이라도 읽어 뒀나 (오래됐어도)
+    func has(_ pid: pid_t) -> Bool { cache[pid] != nil }
+
     /// 캐시가 새것이면 바로, 아니면 다시 읽은 뒤 done (메인 스레드)
     func items(_ pid: pid_t, done: @escaping ([MenuShortcut]) -> Void) {
         if let c = cache[pid], Date().timeIntervalSince(c.at) < Self.maxAge { done(c.items); return }
@@ -35,11 +38,14 @@ final class MenuIndex {
             for k in AX.children(el) {
                 nodes += 1
                 if nodes > 3000 || Date().timeIntervalSince(start) > 1.5 { return }
-                let title = AX.string(k, kAXTitleAttribute) ?? ""
-                if AX.string(k, kAXRoleAttribute) == "AXMenuItem", !title.isEmpty,
-                   let keys = Keys.menu(char: AX.string(k, kAXMenuItemCmdCharAttribute),
-                                        virtualKey: AX.int(k, kAXMenuItemCmdVirtualKeyAttribute),
-                                        modifiers: AX.int(k, kAXMenuItemCmdModifiersAttribute) ?? 0) {
+                // 노드마다 다섯 번 묻지 않고 한 번에 (AX 왕복이 비용의 대부분)
+                let v = AX.values(k, [kAXTitleAttribute, kAXRoleAttribute, kAXMenuItemCmdCharAttribute,
+                                      kAXMenuItemCmdVirtualKeyAttribute, kAXMenuItemCmdModifiersAttribute])
+                let title = v[0] as? String ?? ""
+                if v[1] as? String == "AXMenuItem", !title.isEmpty,
+                   let keys = Keys.menu(char: v[2] as? String,
+                                        virtualKey: (v[3] as? NSNumber)?.intValue,
+                                        modifiers: (v[4] as? NSNumber)?.intValue ?? 0) {
                     out.append(MenuShortcut(title: title, keys: keys))
                 }
                 if depth < 5, !["서비스", "Services"].contains(title) { walk(k, depth: depth + 1) }
@@ -78,8 +84,10 @@ final class ShortcutCoach: NSObject {
     func start() {
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
             guard let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                  app.processIdentifier != getpid(), !Privacy.isBlocked(bundle: app.bundleIdentifier) else { return }
-            self?.menus.items(app.processIdentifier) { _ in }
+                  app.processIdentifier != getpid(), !Privacy.isBlocked(bundle: app.bundleIdentifier), let self else { return }
+            // 처음 보는 앱만 미리 읽어 둔다. 오래된 캐시는 실제로 클릭했을 때 새로 읽는다
+            // (앱을 오갈 때마다 다시 읽으면 메뉴 큰 앱은 0.3~1.5초씩 CPU 를 먹는다)
+            if !self.menus.has(app.processIdentifier) { self.menus.items(app.processIdentifier) { _ in } }
         }
     }
 
@@ -93,9 +101,14 @@ final class ShortcutCoach: NSObject {
 
     private func evaluate(_ c: ShortcutClick, menu: [MenuShortcut]) {
         let sys = systemKeys()
-        let names = Set(NSWorkspace.shared.runningApplications.compactMap(\.localizedName))
+        // 실행 중인 앱 이름은 규칙이 실제로 물을 때만 모은다: localizedName 은 앱마다 LaunchServices XPC 왕복이라
+        // 클릭마다 다 모으면 50ms 넘게 걸린다 (실측 sample)
+        var names: Set<String>?
         guard let h = ShortcutRules.hint(for: c, menu: menu, spacesKeys: sys.spaces, spotlight: sys.spotlight,
-                                         isRunning: { names.contains($0) }) else { return }
+                                         isRunning: { app in
+                                             if names == nil { names = Set(NSWorkspace.shared.runningApplications.compactMap(\.localizedName)) }
+                                             return names!.contains(app)
+                                         }) else { return }
         let now = Date(), day = Self.day(now)
         if ledger.noteMouse(h, day: day, now: now), hintsOn, show?(h) == true {
             ledger.markShown(h.id, day: day, now: now)

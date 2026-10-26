@@ -134,7 +134,33 @@ final class BrowserWatcher {
         }
     }
 
+    /// 브라우저별로 한 번 컴파일한 스크립트. 매번 새로 컴파일하면 OSACompile 이 XProtect 악성코드 검사(YARA 규칙 컴파일)까지
+    /// 돌려 호출마다 메인 스레드 CPU 를 0.1~0.3초씩 먹는다 (실측: 브라우저 앞에 두면 5초마다 + 제목 바뀔 때마다 → CPU 스파이크 6~10%)
+    private static var compiled: [String: NSAppleScript] = [:]
+
     private static func query(bundle: String) -> (url: String, title: String, incognito: Bool)? {
+        var err: NSDictionary?
+        let script: NSAppleScript
+        if let c = compiled[bundle] {
+            script = c
+        } else {
+            guard let s = NSAppleScript(source: source(bundle: bundle)), s.compileAndReturnError(&err) else {
+                if let err { Log.write("브라우저 주소 스크립트 컴파일 실패 \(bundle): \(err[NSAppleScript.errorNumber] ?? "?") \(err[NSAppleScript.errorMessage] ?? "")") }
+                return nil
+            }
+            compiled[bundle] = s
+            script = s
+        }
+        guard let out = script.executeAndReturnError(&err).stringValue else {
+            if let err { Log.write("브라우저 주소 읽기 실패 \(bundle): \(err[NSAppleScript.errorNumber] ?? "?") \(err[NSAppleScript.errorMessage] ?? "")") }
+            return nil
+        }
+        let parts = out.components(separatedBy: "\n")
+        guard parts.count >= 2, !parts[0].isEmpty else { return nil }
+        return (parts[0], parts[1], parts.count > 2 && parts[2] == "incognito")
+    }
+
+    private static func source(bundle: String) -> String {
         let script: String
         if chromium.contains(bundle) {
             script = """
@@ -160,13 +186,6 @@ final class BrowserWatcher {
             end timeout
             """
         }
-        var err: NSDictionary?
-        guard let out = NSAppleScript(source: script)?.executeAndReturnError(&err).stringValue else {
-            if let err { Log.write("브라우저 주소 읽기 실패 \(bundle): \(err[NSAppleScript.errorNumber] ?? "?") \(err[NSAppleScript.errorMessage] ?? "")") }
-            return nil
-        }
-        let parts = out.components(separatedBy: "\n")
-        guard parts.count >= 2, !parts[0].isEmpty else { return nil }
-        return (parts[0], parts[1], parts.count > 2 && parts[2] == "incognito")
+        return script
     }
 }
