@@ -209,5 +209,15 @@ check("끈 힌트는 안 보임", !l2.noteMouse(tab, day: "d1", now: t0))
 l2.prune(keeping: ["d9"])
 check("오래된 날짜 정리", l2.entries[tab.id]!.mouse.isEmpty)
 
+// 브라우저 주소를 모르는 동안은 막힌 것으로 본다 (자동화 권한 거부·응답 전·Safari)
+do {
+    var snap = Snapshot()
+    check("기본은 안 막힘", !snap.blocked)
+    snap.urlUnknown = true
+    check("주소 모르면 막힘", snap.blocked)
+    snap.urlUnknown = false; snap.incognito = true
+    check("시크릿 창은 막힘", snap.blocked)
+}
+
 print(failed == 0 ? "\n모두 통과" : "\n실패 \(failed)건")
 exit(failed == 0 ? 0 : 1)

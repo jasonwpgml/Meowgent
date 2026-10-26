@@ -53,7 +53,12 @@ final class BrowserWatcher {
         // NSAppleScript는 메인 스레드에서. 스크립트 안에 2초 타임아웃이 있고 보통 수십 ms.
         let result = BrowserWatcher.query(bundle: bundle)
         running = false
-        if let result { apply(bundle: bundle, result) }
+        if let result {
+            apply(bundle: bundle, result)
+        } else {
+            // 못 읽었으면 모르는 상태로 둔다 (내용 기록 안 함)
+            Context.shared.update { if $0.bundle == bundle { $0.url = nil; $0.urlUnknown = true } }
+        }
         if let p = pending { pending = nil; DispatchQueue.main.async { self.refresh(bundle: p) } }
     }
 
@@ -87,17 +92,22 @@ final class BrowserWatcher {
         // 응답이 오는 사이에 다른 앱으로 넘어갔으면 버린다
         guard Context.shared.snapshot.bundle == bundle else { return }
         let blocked = Privacy.isBlocked(url: r.url)
+        // Safari는 개인 정보 보호 창을 구분할 수 없어 설정으로 믿기 전까지는 주소·내용을 남기지 않는다
+        let unverified = BrowserWatcher.safari.contains(bundle) && !Privacy.config.trustSafari
+        let hidden = r.incognito || unverified
         Context.shared.update {
-            $0.url = (blocked || r.incognito) ? nil : r.url
+            $0.url = (blocked || hidden) ? nil : r.url
             $0.urlBlocked = blocked
             $0.incognito = r.incognito
+            $0.urlUnknown = unverified
         }
-        let key = r.incognito ? "incognito" : (blocked ? "blocked:" + (URL(string: r.url)?.host ?? "") : r.url)
+        let reason = r.incognito ? "incognito" : (unverified ? "safari_unverified" : "blocked_domain")
+        let key = hidden ? reason : (blocked ? "blocked:" + (URL(string: r.url)?.host ?? "") : r.url)
         guard key != lastURL else { return }
         lastURL = key
 
-        if r.incognito || blocked {
-            var e = Event("browser", payload: ["reason": r.incognito ? "incognito" : "blocked_domain"], privacy: "blocked")
+        if hidden || blocked {
+            var e = Event("browser", payload: ["reason": reason], privacy: "blocked")
             e.fillContext()
             store.write(e)
             return

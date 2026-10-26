@@ -92,7 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         tap.onPaste = { [weak self] in
             guard let self else { return }
-            let r = self.system.recordPaste(field: self.text.currentField)
+            let r = self.system.recordPaste(field: self.text.currentField, secure: self.text.secureFocus)
             self.text.notePaste(chars: r.chars)
             if r.sensitive {
                 let s = Context.shared.snapshot

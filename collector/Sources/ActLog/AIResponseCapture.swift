@@ -73,14 +73,15 @@ final class AIResponseCapture {
             return
         }
         var text = answer
-        var payload: [String: Any] = ["ai": j.ai, "prompt": AX.clip(j.prompt, 300), "chars": answer.count,
+        let (prompt, promptMasked) = Privacy.redact(AX.clip(j.prompt, 300))
+        var payload: [String: Any] = ["ai": j.ai, "prompt": prompt, "chars": answer.count,
                                       "wait_s": elapsed, "method": j.method]
         let limit = Privacy.config.maxAIResponseChars
         if text.count > limit { text = String(text.prefix(limit)); payload["truncated"] = true }
         if partial { payload["partial"] = true }
         let (redacted, masked) = Privacy.redact(text)
         payload["text"] = redacted
-        var e = Event("ai_response", payload: payload, privacy: masked ? "masked" : "none")
+        var e = Event("ai_response", payload: payload, privacy: (masked || promptMasked) ? "masked" : "none")
         e.app = j.appName; e.bundle = j.bundle; e.pid = j.pid; e.url = j.url; e.window = j.window
         store.write(e)
     }

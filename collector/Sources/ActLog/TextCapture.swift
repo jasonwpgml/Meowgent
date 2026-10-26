@@ -46,7 +46,8 @@ final class TextCapture {
     private func attach(_ f: AXUIElement, pid: pid_t, bundle: String?, appName: String?, observer: AXObserver?) {
         let role = AX.string(f, kAXRoleAttribute) ?? ""
         let subrole = AX.string(f, kAXSubroleAttribute)
-        if AX.isSecure(role: role, subrole: subrole) {
+        secureFocus = AX.isSecure(role: role, subrole: subrole)
+        if secureFocus {
             // 비밀번호 칸: 값은 절대 읽지 않는다. 존재만 남긴다.
             var e = Event("text", payload: ["field_role": "secure"], privacy: "secure_gap")
             e.fillContext()
@@ -85,6 +86,7 @@ final class TextCapture {
         }
         observedElement = nil
         element = nil
+        secureFocus = false
         idleTimer?.invalidate(); idleTimer = nil
         refreshTimer?.invalidate(); refreshTimer = nil
     }
@@ -153,6 +155,8 @@ final class TextCapture {
 
     /// 지금 입력창 이름 (붙여넣기 기록용)
     var currentField: (role: String, label: String?)? { element == nil ? nil : (role, fieldLabel) }
+    /// 지금 포커스가 비밀번호 칸에 있다 (값은 안 읽지만, 붙여넣기 내용도 남기면 안 된다)
+    private(set) var secureFocus = false
 
     func commit(reason: String, reread: Bool = true) {
         idleTimer?.invalidate(); idleTimer = nil

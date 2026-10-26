@@ -10,9 +10,12 @@ struct Snapshot {
     var appBlocked = false
     var urlBlocked = false
     var incognito = false
+    /// 브라우저가 앞에 있는데 주소를 아직(또는 영영) 못 읽은 상태: 자동화 권한 거부, 첫 응답 전, 조회 실패, 시크릿 창을 구분 못 하는 브라우저.
+    /// 모르는 동안은 막힌 것으로 본다 (fail-closed).
+    var urlUnknown = false
     var paused = false
 
-    var blocked: Bool { appBlocked || urlBlocked || incognito }
+    var blocked: Bool { appBlocked || urlBlocked || incognito || urlUnknown }
 }
 
 final class Context {
@@ -60,6 +63,9 @@ struct Config: Codable {
     /// Claude·ChatGPT 데스크톱 앱의 답변도 저장할지 (대화 기록은 AI hub가 따로 모으므로 기본은 끔, 질문은 항상 저장)
     var aiResponsesFromDesktopApps = false
     var maxAIResponseChars = 30000
+    /// Safari는 개인 정보 보호 창을 스크립트로 구분할 수 없다. 기본(false)은 Safari 페이지의 주소·내용을 기록하지 않는다.
+    /// true로 켜면 기록하되 개인 정보 보호 창도 같이 기록된다.
+    var trustSafari = false
 
     init() {}
 
@@ -80,6 +86,7 @@ struct Config: Codable {
         captureAIResponses = try c.decodeIfPresent(Bool.self, forKey: .captureAIResponses) ?? d.captureAIResponses
         aiResponsesFromDesktopApps = try c.decodeIfPresent(Bool.self, forKey: .aiResponsesFromDesktopApps) ?? d.aiResponsesFromDesktopApps
         maxAIResponseChars = try c.decodeIfPresent(Int.self, forKey: .maxAIResponseChars) ?? d.maxAIResponseChars
+        trustSafari = try c.decodeIfPresent(Bool.self, forKey: .trustSafari) ?? d.trustSafari
     }
 
     static func load(dir: URL) -> Config {

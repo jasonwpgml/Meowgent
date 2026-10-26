@@ -52,6 +52,7 @@ final class AppWatcher {
             $0.app = name; $0.bundle = bundle; $0.pid = pid
             $0.window = nil; $0.url = nil
             $0.appBlocked = blocked; $0.urlBlocked = false; $0.incognito = false
+            $0.urlUnknown = BrowserWatcher.isBrowser(bundle)
         }
         var e = Event("app", payload: ["event": "activate"], privacy: blocked ? "blocked" : "none")
         e.app = name; e.bundle = bundle; e.pid = pid

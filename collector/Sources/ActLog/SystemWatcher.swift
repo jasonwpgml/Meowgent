@@ -88,7 +88,7 @@ final class SystemWatcher {
         var e = Event("clipboard")
         e.fillContext()
         let concealed = SystemWatcher.isConcealed(types)
-        if concealed || Context.shared.snapshot.blocked {
+        if concealed || secureOn || Context.shared.snapshot.blocked {
             e.privacy = "blocked"
             store.write(e)
             return
@@ -106,7 +106,8 @@ final class SystemWatcher {
 
     /// Cmd+V 순간: 무엇을(클립보드 내용) 어디에(앱·창·주소·입력창) 붙여넣었나. 붙여넣은 글자 수를 돌려준다.
     @discardableResult
-    func recordPaste(field: (role: String, label: String?)?) -> (chars: Int, sensitive: Bool) {
+    /// `secure`: 포커스가 비밀번호 칸에 있다 (TextCapture.secureFocus). 그때와 보안 입력(secureOn) 중에는 내용을 남기지 않는다.
+    func recordPaste(field: (role: String, label: String?)?, secure: Bool) -> (chars: Int, sensitive: Bool) {
         let pb = NSPasteboard.general
         let types = pb.types?.map(\.rawValue) ?? []
         var e = Event("paste")
@@ -114,7 +115,7 @@ final class SystemWatcher {
         var payload: [String: Any] = [:]
         if let field { payload["field_role"] = field.role; if let l = field.label { payload["field"] = l } }
         let concealed = SystemWatcher.isConcealed(types)
-        if concealed || Context.shared.snapshot.blocked || field?.role == "secure" {
+        if concealed || secure || secureOn || Context.shared.snapshot.blocked {
             e.privacy = "blocked"
             e.payload = payload
             store.write(e)
