@@ -11,6 +11,8 @@ final class PetController: NSObject {
     var setPaused: (Bool) -> Void = { _ in }
     var contextLine: () -> String? = { nil }
     var isHidden: Bool { true }
+    /// 고양이 머리(Codex) 피곤함 0~100 (진짜 고양이는 졸고, 껍데기는 쓰지 않는다)
+    static var tirednessSource: () -> Double = { 0 }
 
     init(dataDir: URL) {
         super.init()

@@ -170,7 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return s.window.map { "\(app) — \(String($0.prefix(40)))" } ?? app
         }
         p.agentSummary = { [weak self] in
-            [self?.agents.summary ?? "", self?.quota.attention ?? ""].filter { !$0.isEmpty }.joined(separator: "\n")
+            [self?.agents.summary ?? "", self?.quota.attention ?? "", self?.mind.isOff == false ? self?.mind.quotaLine ?? "" : ""]
+                .filter { !$0.isEmpty }.joined(separator: "\n")
         }
         p.extraMenu = { [weak self] m in
             self?.mind.addMenuItems(to: m)
@@ -182,6 +183,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         quota.codexFallback = { [weak self] in self?.agents.codexWindows ?? [] }
         agents.notify = { [weak p] n in p?.notify(n.text, urgent: n.urgent) }
         mind.say = { [weak p] l in p?.notify(l.text, urgent: l.urgent) }
+        mind.trick = { [weak p] name in p?.trick(name) }
+        PetController.tirednessSource = { [weak self] in self?.mind.isOff == false ? self?.mind.tiredness ?? 0 : 0 }
         mind.start()
         agents.frontBundle = { Context.shared.snapshot.bundle }
         agents.start()
@@ -234,7 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !ax { menu.addItem("손쉬운 사용 권한 열기…", #selector(openAXSettings), target: self) }
         if !input { menu.addItem("입력 모니터링 권한 열기…", #selector(openInputSettings), target: self) }
         menu.addItem(pet?.isHidden == false ? "고양이 숨기기" : "고양이 보이기", #selector(togglePet), target: self)
-        if pet != nil { mind.addMenuItems(to: menu) }
+        if pet != nil { mind.addMenuItems(to: menu, withQuota: true) }
         if pet?.hasToys == true { menu.addItem("🧺 고양이 장난감 치우기", #selector(putToysAway), target: self) }
         menu.addItem("데이터 폴더 열기", #selector(openData), target: self)
         menu.addItem("설정 파일(config.json) 열기", #selector(openConfig), target: self)

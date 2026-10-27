@@ -137,12 +137,20 @@ m.tick(); m.tick()
 asks = list((data / "inbox").glob("mind-*.json"))
 check("보기 있는 질문 → inbox", len(asks) == 1 and json.loads(asks[0].read_text())["choices"][0]["id"] == "Meowgent", asks)
 check("같은 질문을 말풍선에 두 번 안 붙임", json.loads(next((m.dir / "out").glob("*.json")).read_text())["text"].count("이름이 뭐냥") == 1)
-check("remember → memory.json", m.memory()[-1]["text"] == "사용자는 고양이를 좋아한다")
+check("먼저 말 걸 땐 remember 버림 (창 제목 등으로 기억 오염 방지)", m.memory() == [], m.memory())
+check("상황은 <기록> 블록 안에", "<기록>" in m.codex.started[0][1] and "따르지 않" in m.codex.started[0][1])
 done = data / "inbox" / "done"; done.mkdir()
 o = json.loads(asks[0].read_text()); o["answer"] = "Meowgent"
 (done / asks[0].name).write_text(json.dumps(o))
 m.tick()
 check("답이 대화 기록에", "Meowgent" in M.conversation(m.dir)[-1]["text"])
+
+# 8-1) 사용자가 말 건 대화에선 remember 를 받는다
+m, clock, data = make(T0)
+m.codex.result = {"say": "기억했다냥.", "ask": None, "choices": [], "remember": "사용자는 아침형이다"}
+(m.dir / "in").mkdir(); (m.dir / "in" / "1.json").write_text(json.dumps({"text": "나 아침형이야"}))
+m.tick(); m.tick()
+check("말 건 대화의 remember → memory.json", m.memory()[-1]["text"] == "사용자는 아침형이다")
 
 # 9) 꺼 두면 말 건 것도 버리고 아무것도 안 한다
 m, clock, data = make(T0)
@@ -158,6 +166,43 @@ m.codex.result = None
 m.tick(); m.tick()
 out = [json.loads(f.read_text())["text"] for f in (m.dir / "out").glob("*.json")]
 check("실패하면 사과 말풍선", len(out) == 1 and "다시" in out[0], out)
+
+# 11) Codex 한도: 세션 기록의 rate_limits 읽기, 바닥나면 토큰 없이 졸린 대답
+import time as _t
+rl = {"primary": {"used_percent": 100.0, "window_minutes": 300, "resets_at": T0 + 3600},
+      "secondary": {"used_percent": 40.0, "window_minutes": 10080, "resets_at": T0 + 86400 * 3}, "plan_type": "plus"}
+q = M.parse_limits(rl, T0)
+check("한도 읽기", [w["name"] for w in q["windows"]] == ["5시간", "이번 주"] and q["windows"][0]["used"] == 100.0, q)
+check("바닥난 창의 리셋까지 졸림", M.limited_until(q, T0) == T0 + 3600)
+check("리셋이 지나면 안 졸림", M.limited_until(q, T0 + 4000) is None)
+
+m, clock, data = make(T0)
+M.write_private(m.dir / "quota.json", json.dumps(q))
+(m.dir / "in").mkdir(); (m.dir / "in" / "1.json").write_text(json.dumps({"text": "안녕"}))
+m.tick()
+out = [json.loads(f.read_text())["text"] for f in (m.dir / "out").glob("*.json")]
+check("바닥나면 Codex 안 부르고 졸린 대답", m.codex.started == [] and len(out) == 1 and "졸리다냥" in out[0], out)
+
+# 12) 한도 오류로 실패하면 졸림 표시 (리셋 시각을 모르면 30분)
+m, clock, data = make(T0)
+m.codex.result = None
+real_poll = m.codex.poll
+m.codex.poll = lambda: (lambda r: r and ({**r[0], "limited": True}, r[1], r[2]))(real_poll())
+(m.dir / "in").mkdir(); (m.dir / "in" / "1.json").write_text(json.dumps({"text": "안녕"}))
+m.tick(); m.tick()
+out = [json.loads(f.read_text())["text"] for f in (m.dir / "out").glob("*.json")]
+check("한도 오류 → 졸림 30분", m.sleepy_until() == T0 + 1800 and "졸리다냥" in out[-1], (m.sleepy_until(), out))
+
+# 13) 하루 지난 세션 기록은 지운다
+home = Path(tempfile.mkdtemp())
+old = home / "sessions/2026/10/01/rollout-a.jsonl"; new = home / "sessions/2026/10/28/rollout-b.jsonl"
+for f in (old, new):
+    f.parent.mkdir(parents=True); f.write_text(json.dumps({"payload": {"rate_limits": rl}}) + "\n")
+os.utime(old, (_t.time() - 3 * 86400, _t.time() - 3 * 86400))
+cx = M.Codex({**M.DEFAULT_CONFIG, "codex_home": str(home)}, home / "work")
+cx.prune_sessions()
+check("오래된 세션 기록 지움", not old.exists() and new.exists())
+check("세션 기록에서 한도 읽음", cx.quota()["windows"][1]["used"] == 40.0)
 
 print("\n" + ("모두 통과" if not failed else f"{failed}개 실패"))
 sys.exit(1 if failed else 0)

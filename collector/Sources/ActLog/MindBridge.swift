@@ -8,6 +8,18 @@ import AppKit
 final class MindBridge: NSObject {
     struct Line { let text: String; let urgent: Bool }
     var say: ((Line) -> Void)?
+    /// 고양이 재주 (기지개 등). 한도가 다시 채워져 깰 때 쓴다
+    var trick: ((String) -> Void)?
+
+    /// mind/quota.json: 고양이 Codex 계정의 한도 (cat_mind 가 부를 때마다 갱신)
+    struct Quota {
+        struct Window { let name: String; let used: Double; let resetsAt: Date }
+        let windows: [Window]
+        let limitedUntil: Date?
+    }
+    private(set) var quota: Quota?
+    private var quotaStamp: Date?
+    private var wasSleepy: Bool?
 
     private let dir: URL
     private let dataDir: URL
@@ -77,6 +89,7 @@ final class MindBridge: NSObject {
     }
 
     private func poll() {
+        loadQuota()
         queue.async { [weak self] in
             guard let self else { return }
             let out = self.dir.appendingPathComponent("out")
@@ -90,6 +103,62 @@ final class MindBridge: NSObject {
                 DispatchQueue.main.async { self.say?(line) }
             }
         }
+    }
+
+    // MARK: 한도 · 피곤함
+
+    private func loadQuota() {
+        let url = dir.appendingPathComponent("quota.json")
+        let mod = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+        if mod != quotaStamp, let d = try? Data(contentsOf: url), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+            quotaStamp = mod
+            let wins = (o["windows"] as? [[String: Any]] ?? []).compactMap { w -> Quota.Window? in
+                guard let name = w["name"] as? String, let used = w["used"] as? Double, let r = w["resets_at"] as? Double else { return nil }
+                return Quota.Window(name: name, used: used, resetsAt: Date(timeIntervalSince1970: r))
+            }
+            quota = Quota(windows: wins, limitedUntil: (o["limited_until"] as? Double).map { Date(timeIntervalSince1970: $0) })
+        }
+        // 졸기 시작·깨기는 한 번씩만 말한다 (앱을 켰을 때의 상태는 말하지 않는다)
+        let sleepy = sleepyUntil != nil
+        if let was = wasSleepy, was != sleepy {
+            if sleepy {
+                say?(Line(text: "하암… Codex 한도를 다 써서 졸리다냥. \(Self.when(sleepyUntil!))까지 잠깐 자겠다냥.", urgent: false))
+            } else {
+                trick?("stretch")
+                say?(Line(text: "푹 잤다냥! 한도가 다시 찼다냥. 다시 쌩쌩하다냥.", urgent: false))
+            }
+        }
+        wasSleepy = sleepy
+    }
+
+    /// 한도가 바닥나 쉬는 동안: 바닥난 창이 리셋되는 시각
+    var sleepyUntil: Date? {
+        guard let q = quota else { return nil }
+        let now = Date()
+        let ends = q.windows.filter { $0.used >= 100 && $0.resetsAt > now }.map(\.resetsAt) + [q.limitedUntil].compactMap { $0 }.filter { $0 > now }
+        return ends.max()
+    }
+
+    /// 피곤함 0~100: 한도를 가장 많이 쓴 창의 비율 (리셋이 지난 창은 0). 바닥나면 100
+    var tiredness: Double {
+        if sleepyUntil != nil { return 100 }
+        let now = Date()
+        return quota?.windows.map { $0.resetsAt > now ? $0.used : 0 }.max() ?? 0
+    }
+
+    /// "Codex 5시간 0% · 이번 주 16%" 또는 "😴 05:51까지 졸림"
+    var quotaLine: String? {
+        if let s = sleepyUntil { return "😴 Codex 한도 바닥 · \(Self.when(s))까지 졸림" }
+        guard let q = quota, !q.windows.isEmpty else { return nil }
+        let now = Date()
+        return "Codex " + q.windows.map { "\($0.name) \(Int(($0.resetsAt > now ? $0.used : 0).rounded()))%" }.joined(separator: " · ")
+    }
+
+    static func when(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ko_KR")
+        f.dateFormat = Calendar.current.isDateInToday(d) ? "HH:mm" : "M/d (E) HH:mm"
+        return f.string(from: d)
     }
 
     /// 사용자가 건 말을 mind/in 에 놓는다
@@ -107,7 +176,11 @@ final class MindBridge: NSObject {
 
     // MARK: 메뉴
 
-    func addMenuItems(to menu: NSMenu) {
+    /// withQuota: 한도 줄도 넣는다 (고양이 클릭 메뉴는 agentSummary 로 이미 보여 주므로 false)
+    func addMenuItems(to menu: NSMenu, withQuota: Bool = false) {
+        if withQuota, !isOff, let q = quotaLine {
+            let i = NSMenuItem(title: "🔋 " + q, action: nil, keyEquivalent: ""); i.isEnabled = false; menu.addItem(i)
+        }
         if !isOff { menu.addItem("💬 고양이한테 말 걸기 (\(Self.hotKeyName))", #selector(talk), target: self) }
         let t = menu.addItem("🧠 말하는 고양이 (Codex)", #selector(toggle), target: self)
         t.state = isOff ? .off : .on
