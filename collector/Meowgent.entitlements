@@ -4,5 +4,7 @@
 <dict>
     <!-- Hardened Runtime에서 브라우저에 Apple Event(주소 읽기)를 보내려면 필요 -->
     <key>com.apple.security.automation.apple-events</key><true/>
+    <!-- Hardened Runtime에서 마이크(고양이 대화창의 말하기)를 쓰려면 필요. 빠지면 배포본에서만 조용히 막힌다 -->
+    <key>com.apple.security.device.audio-input</key><true/>
 </dict>
 </plist>

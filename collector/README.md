@@ -67,7 +67,8 @@ python3 tools/actlog_tail.py --stats         # 오늘 종류별 건수, DB 크�
 ## 데이터
 - `~/Library/Application Support/Meowgent/actlog.db` (SQLite, 본인만 읽기 가능). 옛 경로 `…/ActLog`는 같은 곳을 가리키는 심볼릭 링크(brain·tools가 그대로 읽는다)
 - 지우는 기능은 아직 없음 (오래 보관). 크기는 `--stats`로 확인.
-- 외부로 보내는 것은 날씨 조회 하나뿐: 고양이 햇살을 맑은 날에만 띄우려고 30분마다 [Open-Meteo](https://open-meteo.com)에 좌표(소수 한 자리, 약 10km 단위)만 보낸다. 기록·입력 내용은 보내지 않는다.
+- 말하는 고양이(`brain/cat_mind.py`, 선택)를 켜면 고양이를 부를 때마다 활동 요약(앱·창 제목·판단, 입력한 글은 빼고)과 사용자가 건 말이 사용자의 Codex 계정으로 간다. 범위와 끄는 법은 [docs/CAT_MIND.md](../docs/CAT_MIND.md).
+- 그 밖에 외부로 보내는 것은 날씨 조회 하나뿐: 고양이 햇살을 맑은 날에만 띄우려고 30분마다 [Open-Meteo](https://open-meteo.com)에 좌표(소수 한 자리, 약 10km 단위)만 보낸다. 기록·입력 내용은 보내지 않는다.
   위치 바꾸기: `defaults write com.jason.actlog petLat -float 37.5; defaults write com.jason.actlog petLon -float 127.0` · 끄기: `defaults write com.jason.actlog petWeather -bool false` (그땐 해 뜨고 지는 시간만 본다)
 
 ## 점검

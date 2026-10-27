@@ -1,6 +1,6 @@
 # Meowgent
 
-맥 화면 위에 사는 도트 고양이. 타자를 치면 옆에서 노트북을 두드리고, Claude Code·Codex가 답을 끝내면 알려 주고, 사용량 한도와 리셋권을 대신 챙긴다. 켜 두면(옵트인) 맥에서 한 행동을 로컬에 기록해 "지금 무슨 일을 하는지"를 판단한다. 모든 데이터는 이 맥 밖으로 나가지 않는다.
+맥 화면 위에 사는 도트 고양이. 타자를 치면 옆에서 노트북을 두드리고, Claude Code·Codex가 답을 끝내면 알려 주고, 사용량 한도와 리셋권을 대신 챙긴다. 켜 두면(옵트인) 맥에서 한 행동을 로컬에 기록해 "지금 무슨 일을 하는지"를 판단한다. 기록은 이 맥 밖으로 나가지 않는다. 말하는 고양이(선택)를 켜면 그때만 활동 요약을 사용자의 Codex 계정으로 보낸다([docs/CAT_MIND.md](docs/CAT_MIND.md)).
 
 - 번들 ID `io.github.jasonwpgml.meowgent` · 실행 파일 `Meowgent.app` · macOS 14+
 - 상시 비용: CPU 평균 0.3% 안팎(사용 중 중앙값 1.2%), 메모리 35MB (2026-10-25 실측)
@@ -11,6 +11,7 @@
 |---|---|---|---|---|
 | 앱 (수집기 + 고양이) | `collector/` | Swift | 메뉴바 앱. 행동 기록, 프라이버시 필터, SQLite 저장, 고양이 오버레이, 에이전트 로그 감시, 한도 알림, 단축키 힌트 | 본체 |
 | brain | `brain/` | Python (표준 라이브러리만) | 기록을 작업 구간으로 묶어 Clef에 판단을 묻고 `now.md`·타임라인을 쓴다 | 없으면 고양이가 "판단기는 꺼져 있다"고 말할 뿐 |
+| 말하는 고양이 | `brain/cat_mind.py` | Python (표준 라이브러리만) | 평소엔 규칙만 돌다가 일이 생기면 Clef에 말 걸지 묻고, 통과하면 고양이 전용 Codex 계정으로 말을 받아 온다 | 없으면 고양이가 말을 안 할 뿐 |
 | Clef 판단 서버 | `tools/install_clef.sh` | llama-server | 구간마다 활동·프로젝트·집중도 분류 (GPU 3초, 메모리 6.4GB 상주) | 없어도 됨. GPU 없는 기기엔 넣지 않는다 |
 
 앱 안에서 수집기와 고양이는 폴더로 나뉘어 있다. `collector/Sources/ActLog/`가 수집기(앱 전환·입력 텍스트·브라우저·클릭·클립보드·시스템 상태·저장), `collector/Sources/ActLog/Pet/`가 고양이(행동·물리·그리기·장난감·일과·알림·한도 규칙)다. 둘은 `main.swift`의 클로저 몇 개로만 연결된다.
@@ -26,7 +27,7 @@ collector/        Swift 패키지. build.sh(개발 설치) · bundle.sh · relea
   PetStub/        고양이 저장소가 없을 때 쓰는 빈 껍데기 PetController (고양이 없이 수집기만)
   Tests/          순수 로직 테스트 (한글 diff·마스킹·검색어·단축키 규칙·한도 규칙, pet 있으면 지형 계산도)
 pet/              [서브모듈, 비공개] 고양이 행동·물리·그리기 약 5,300줄, 원화, CAT_MOTION·CAT_VOICE, 원화 잠금 도구
-brain/            actlog_brain.py · install.sh(launchd) · test_brain.py
+brain/            actlog_brain.py · cat_mind.py(말하는 고양이) · install.sh(launchd) · mind_setup.sh · test_brain.py · test_mind.py
 assets/fonts/     갈무리11 (OFL)
 assets/vendor/    Last tick 팩 (재배포 금지, git에 없음, 개발 빌드 전용)
 assets/original-cat → pet/assets/original-cat 링크 (그림 작업 스크립트 호환용, git에 없음)
@@ -56,12 +57,13 @@ cd ../brain && ./install.sh       # (선택) brain 을 launchd 에 등록
 | 파일 | 내용 |
 |---|---|
 | `actlog.db` | 원본 이벤트 (SQLite WAL, 0600) |
+| `mind/` | 말하는 고양이 설정·대화·기억 (docs/CAT_MIND.md) |
 | `brain.db`, `wiki/now.md`, `wiki/timeline/` | brain 판단 결과 |
 | `config.json` | 차단 앱·도메인 추가분, 텍스트 커밋 간격 등 |
 | `shortcuts.json`, `notices.jsonl`, `memos.jsonl`, `feedback.jsonl`, `reset_passes.json` | 단축키 힌트 기록, 고양이 알림·메모·피드백, 직접 적은 리셋권 |
 | `actlog.log` | 앱 로그 (5MB 넘으면 교체) |
 
-외부 통신은 날씨 하나뿐이다. 고양이 햇살과 창밖 날씨를 위해 30분마다 Open-Meteo에 좌표(소수 한 자리)만 보낸다. `defaults write io.github.jasonwpgml.meowgent petWeather -bool false`로 끈다.
+말하는 고양이를 켜지 않았다면 외부 통신은 날씨 하나뿐이다. 고양이 햇살과 창밖 날씨를 위해 30분마다 Open-Meteo에 좌표(소수 한 자리)만 보낸다. `defaults write io.github.jasonwpgml.meowgent petWeather -bool false`로 끈다.
 
 ## 배포와 공개 범위
 
@@ -81,6 +83,7 @@ cd ../brain && ./install.sh       # (선택) brain 을 launchd 에 등록
 | [docs/SHORTCUT_HINTS.md](docs/SHORTCUT_HINTS.md) | 단축키 힌트 조사와 규칙 |
 | `pet/docs/CAT_MOTION.md` | 고양이다운 자세·움직임 기준 (비공개 저장소) |
 | `pet/docs/CAT_VOICE.md` | 고양이 말투·성격 기준 (비공개 저장소) |
+| [docs/CAT_MIND.md](docs/CAT_MIND.md) | 말하는 고양이: 루프·Clef 문지기·Codex, 밖으로 나가는 것, 대화창·음성·실행 계획 |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | 시작 전 조사: 오버레이 방식, 그림, 말 거는 규칙 |
 | [DESIGN.md](DESIGN.md) | 2026-10-14 원래 설계. L3 위키·MCP는 만들지 않았고 지금 구조는 이 README가 정본 |
 
