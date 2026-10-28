@@ -56,7 +56,7 @@ mind/in ◀─ 앱 "💬 말 걸기" ─┘        │
 ### Codex
 
 - 계정은 고양이 전용 `CODEX_HOME=~/.codex-meowgent`를 쓴다(지금은 imson1345). 평소 쓰는 `~/.codex`의 계정·설정·기록과 섞이지 않는다. `brain/mind_setup.sh`가 이 홈을 만들고 브라우저로 로그인시킨다.
-- 이 홈의 `config.toml`은 셸·브라우저·플러그인·이미지·웹 검색 같은 도구를 모두 끈다. 실행 옵션은 `-s read-only`이다. 답은 `--output-schema`로 `{say, ask, choices, remember}` JSON 형식에 맞춰 받는다.
+- 이 홈의 `config.toml`은 셸·브라우저·플러그인·이미지·웹 검색 같은 도구를 모두 끈다. 실행 옵션은 `-s read-only`이다. 답은 `--output-schema`로 `{say, ask, choices, remember, need}` JSON 형식에 맞춰 받는다.
   - 처음엔 `--ephemeral`로 세션 기록을 남기지 않았다. 그런데 한도(rate_limits)는 세션 기록에만 남고 `codex exec --json`에는 안 나와서 기록을 남기게 바꿨다. 그 기록에는 보낸 프롬프트(활동 요약)가 들어 있으니 `~/.codex-meowgent/sessions`에 하루만 두고 지운다(`Codex.prune_sessions`, 한 시간마다).
 
 ### Codex 한도와 피곤함 (2026-10-28)
@@ -71,8 +71,35 @@ mind/in ◀─ 앱 "💬 말 걸기" ─┘        │
   - 100이면 타자 칠 때 노트북 앞에서 꾸벅꾸벅 졸고(새벽 졸기와 같은 그림), 앉아 있을 때 하품을 자주 한다.
   - 바닥나면 "하암… HH:MM까지 잠깐 자겠다냥", 다시 차면 기지개를 켜며 "푹 잤다냥! 다시 쌩쌩하다냥"이라고 한 번씩 말한다. 앱을 켰을 때 이미 그런 상태면 말하지 않는다.
 - 2026-10-28 실측: imson1345(plus) 5시간 0% · 주간 16%. 가짜 `quota.json`(5시간 100%)을 넣었더니 2초 안에 졸기 시작 말, 되돌렸더니 깨는 말이 나왔다.
-- 모델은 `gpt-6-luna`, 추론은 low다. 2026-10-28 실측으로 한 번에 4~7초 걸렸다. 한 번 부를 때 Codex 기본 지시문 때문에 약 1만 1천 토큰을 쓴다. 말 걸기를 누르고 말풍선이 뜨기까지 8초쯤 걸린다. `gpt-6.1-sol`은 5초쯤 걸리고 말투는 비슷했다.
-- 말투는 `pet/docs/CAT_VOICE.md`를 `mind/persona.md`로 복사해 쓴다(`brain/install.sh`가 한다). 없으면 짧은 기본 성격을 쓴다. luna가 "있네다냥"처럼 어미를 섞어서 규칙에 어미 예시를 넣었다.
+- 한 번 부를 때 Codex 기본 지시문 때문에 약 1만 1천~1만 5천 토큰을 쓴다.
+- 성격은 `brain/persona.md`(똑똑하지만 도도하고 귀찮음 많은 고양이)를 `mind/persona.md`로 복사해 쓴다(`brain/install.sh`가 한다). 없으면 `DEFAULT_PERSONA`. 규칙 대사(앱 말풍선)는 따로 `pet/docs/CAT_VOICE.md`를 따른다. luna가 "있네다냥"처럼 어미를 섞어서 규칙에 어미 예시를 넣었다.
+
+### 모델과 허락 (2026-10-28)
+
+| 언제 | 모델 (`mind.json`) | 추론 | 실측 (같은 질문) |
+|---|---|---|---|
+| 먼저 말 걸 때 | `model` = gpt-6-luna | low | 4~7초 |
+| 사용자가 말 걸었을 때 | `chat_model` = gpt-6.1-sol | medium | 8~12초 |
+| 허락받았을 때 | `big_model` = gpt-6-astra | high | 23초 (medium 15초) |
+
+- 프롬프트에 지금 모델·추론·로그인 계정(`auth.json`의 id_token 이메일)을 넣는다. 전엔 이걸 몰라서 "GPT-6.1 기반"이라고 지어냈다.
+- 대화창 답은 400자까지, 먼저 말 걸 땐 80자. 일반 지식은 아는 대로 답한다. 사용자 활동·사정은 기록에 있는 것만 말한다.
+- 고양이는 답에 `need: {tool, why}`를 넣어 더 필요한 걸 요청할 수 있다. `cat_mind`가 `inbox/mind-perm-*.json`(30분 유효)을 만들고, 대화창 아래와 얼굴 옆 ?에 버튼이 뜬다. 허락하면 같은 질문을 그 도구를 켜고 다시 답한다.
+
+| tool | 켜는 것 | 보기 |
+|---|---|---|
+| `astra` | `big_model`·`big_effort`로 다시 답 | 이번만 · 항상 · 안 돼 |
+| `web` | `-c web_search="live"` | 이번만 · 항상 · 안 돼 |
+| `read` | `-c features.shell_tool=true`, 샌드박스 read-only (네트워크 없음) | 이번만 · 항상 · 안 돼 |
+| `write` | 셸 + `-s workspace-write --add-dir ~` | 이번만 · 안 돼 (항상 없음) |
+
+- "항상 허락"은 `mind.json`의 `allow`에 남는다. web·read는 그 뒤로 대화마다 켜지고, astra는 sol이 요청하면 묻지 않고 넘긴다. 지우려면 `allow`에서 뺀다.
+- 도구를 켠 실행엔 활동 기록을 `labels` 수준으로만 보낸다. 창 제목 속 글이 검색어나 명령으로 새어 나가지 않게 하려는 것이다. 도구 실행 제한 시간은 `tool_timeout_s`(300초).
+- 2026-10-28 실측: 날씨 질문 → sol이 web 요청 / 웹 켜고 주가 질문 24초 / read 켜고 `ls` 10초.
+
+### 대화 단위
+
+`session_gap_s`(30분) 넘게 말이 끊기면 새 대화로 친다. 지난 대화는 원문 대신 요약으로만 이어진다. 기억 층·예산·정리는 [CAT_MEMORY.md](CAT_MEMORY.md)에 있다.
 
 ## 밖으로 나가는 것 (켜 두면)
 
@@ -85,7 +112,9 @@ mind/in ◀─ 앱 "💬 말 걸기" ─┘        │
 | `full` | 위 + 구간의 마지막 AI 질문·검색어 |
 
 어느 단계에서든 보내지 않는 것: 입력한 글, 붙여넣은 내용, 클립보드, 전체 URL. 수집기가 막는 앱·사이트(은행, 비밀번호 칸, 시크릿 창 등)는 애초에 기록에 없다.
-사용자가 건 말, 최근 대화 12줄, 고양이가 기억한 사실(`remember`, 사용자가 직접 알려 준 것만, 최대 50줄)은 언제나 간다.
+사용자가 건 말, 이번 대화(최근 10턴 + 앞부분 요약), 사용자에 대한 사실, 최근 대화 요약 3개, 이번 말과 관련 있어 보이는 옛 요약은 언제나 간다. 대화가 끝나면 그 대화 원문을 luna에 한 번 더 보내 정리한다.
+
+허락한 도구를 켜면 더 나간다: `read`·`write`는 고양이가 읽은 파일 내용과 명령 결과가, `web`은 검색어가 OpenAI로 간다.
 
 끄기: 고양이 메뉴나 메뉴바에서 "🧠 말하는 고양이 (Codex)"를 누른다. `mind/off` 파일이 생기고, 루프는 계속 돌지만 아무것도 읽지 않고 보내지도 않는다.
 
@@ -95,13 +124,16 @@ mind/in ◀─ 앱 "💬 말 걸기" ─┘        │
 |---|---|
 | `mind.json` | 설정 (위 기본값, `cat_mind.py`의 `DEFAULT_CONFIG`) |
 | `in/`, `out/` | 앱 ↔ 루프 메시지. 읽으면 지운다 |
-| `conversation.jsonl` | 사용자·고양이 대화, 고양이 질문에 한 답 |
-| `memory.json` | 고양이가 기억하는 사실 |
-| `state.json` | 이미 처리한 신호, 말한 시각, 자리 비움 상태 |
+| `conversation.jsonl` | 사용자·고양이 대화, 고양이 질문에 한 답. `keep_days`(30일) 지나고 내보내기·정리가 끝난 줄은 지운다 |
+| `transcripts/` | 끝난 대화 하나당 파일 하나(`YYYYMMDD-HHMMSS.jsonl`). AI Archive Hub가 가져가 AND가 찾는다. 30일 뒤 지운다 |
+| `facts.json` | 사용자에 대한 사실 (`id`, `since`, `source`, `evidence`, `expires_at`, `valid_to`). 예전 `memory.json`은 처음 실행 때 옮기고 `memory.json.old`로 둔다 |
+| `episodes.jsonl` | 끝난 대화 요약 (주제, 요약, 남은 일) |
+| `rules.json` | 사용자가 "남겨"를 고른 말투 규칙 |
+| `state.json` | 이미 처리한 신호, 말한 시각, 자리 비움 상태, 대화 중 요약(`note`), 어디까지 내보내고 정리했는지 |
 | `alive.json` | 10초마다 남기는 살아 있음 신호. 앱은 30초 넘게 신호가 없으면 "머리가 안 돌고 있다"고 말한다 |
 | `thinking` | Codex 답을 기다리는 동안만 있다. 대화창의 "생각 중" |
 | `quota.json` | 고양이 Codex 계정의 한도 (5시간·주간 사용률, 리셋 시각, 한도 오류로 졸린 시각) |
-| `persona.md` | 말투 (선택) |
+| `persona.md` | 성격·말투 (`brain/persona.md` 복사본) |
 | `work/` | Codex 실행 폴더 (스키마, 마지막 답, 오류 출력) |
 | `mind.log` | 로그 |
 

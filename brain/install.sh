@@ -39,8 +39,8 @@ MIND_PLIST="$HOME/Library/LaunchAgents/$MIND_LABEL.plist"
 MIND_DIR="$HOME/Library/Application Support/Meowgent/mind"
 cp cat_mind.py "$DEST/cat_mind.py"
 mkdir -p "$MIND_DIR" && chmod 700 "$MIND_DIR"
-# 고양이 말투 문서는 비공개 저장소(pet/)에 있다. 있으면 고양이 머리의 성격으로 쓴다
-[[ -f ../pet/docs/CAT_VOICE.md ]] && install -m 600 ../pet/docs/CAT_VOICE.md "$MIND_DIR/persona.md"
+# 말하는 고양이의 성격 (없으면 cat_mind 의 DEFAULT_PERSONA)
+install -m 600 persona.md "$MIND_DIR/persona.md"
 cat > "$MIND_PLIST" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

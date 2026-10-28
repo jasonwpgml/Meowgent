@@ -29,6 +29,9 @@ final class MindChat: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private var previous: NSRunningApplication?   // 창을 열기 전 앞에 있던 앱 (닫으면 돌려준다)
 
     static let width: CGFloat = 360
+    /// 대화창에 보여 주는 만큼. 더 지난 원문은 AI Archive Hub(AND)에 있다
+    static let shownMax = 60
+    static let shownDays: Double = 7
     static let radius: CGFloat = 22
     private static let cream = NSColor(srgbRed: 0.95, green: 0.92, blue: 0.85, alpha: 1)
     private static let ink = NSColor(srgbRed: 0.10, green: 0.08, blue: 0.07, alpha: 1)
@@ -188,7 +191,10 @@ final class MindChat: NSObject, NSTextFieldDelegate, NSWindowDelegate {
 
     /// 대화 기록이 바뀌었을 때만 다시 그린다
     private func reload(force: Bool) {
-        let convo = bridge.conversation(limit: 40)
+        let recent = bridge.conversation(limit: Self.shownMax + 1)
+        let cut = Date().timeIntervalSince1970 - Self.shownDays * 86400
+        let convo = recent.suffix(Self.shownMax).filter { $0.ts >= cut }
+        let cutOff = convo.count < recent.count
         pending.removeAll { p in convo.contains { $0.role == "user" && $0.text == p.text && $0.ts >= p.ts - 2 } || Date().timeIntervalSince1970 - p.ts > 30 }
         let ask = bridge.openAsk()
         let stamp = "\(convo.last?.ts ?? 0)|\(convo.count)|\(pending.count)|\(ask?.id ?? "")"
@@ -197,6 +203,7 @@ final class MindChat: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         shownStamp = stamp
 
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        if cutOff { add(dayLabel("더 지난 대화는 AND(AI Archive Hub)에 있다냥")) }
         if convo.isEmpty && pending.isEmpty {
             add(row(bubble("냥! 뭐든 말 걸어 봐라냥.", cat: true), cat: true))
         }
@@ -205,11 +212,11 @@ final class MindChat: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         for m in convo {
             let d = day.string(from: Date(timeIntervalSince1970: m.ts))
             if d != lastDay { lastDay = d; add(dayLabel(d)) }
-            add(row(bubble(m.text, cat: m.role == "cat"), cat: m.role == "cat"))
+            add(row(bubble(m.text, cat: m.role == "cat"), cat: m.role == "cat", ts: m.ts))
         }
         for p in pending {
             let b = bubble(p.text, cat: false); b.alphaValue = 0.6
-            add(row(b, cat: false))
+            add(row(b, cat: false, ts: p.ts))
         }
 
         askBox.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -248,7 +255,7 @@ final class MindChat: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         label.font = .systemFont(ofSize: 13)
         label.textColor = cat || b < 0.5 ? Self.cream : Self.ink
         label.isSelectable = true
-        label.preferredMaxLayoutWidth = Self.width - 110
+        label.preferredMaxLayoutWidth = Self.width - 152
         let box = NSView()
         box.wantsLayer = true
         box.layer?.backgroundColor = (cat ? NSColor.white.withAlphaComponent(0.08 + b * 0.14) : Self.cream.withAlphaComponent(b)).cgColor
@@ -263,17 +270,30 @@ final class MindChat: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             label.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -11),
             label.topAnchor.constraint(equalTo: box.topAnchor, constant: 7),
             label.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -7),
-            box.widthAnchor.constraint(lessThanOrEqualToConstant: Self.width - 80),
+            box.widthAnchor.constraint(lessThanOrEqualToConstant: Self.width - 130),
         ])
         return box
     }
 
-    private func row(_ v: NSView, cat: Bool) -> NSView {
+    /// ts 가 있으면 말풍선 옆 아래에 시각 (오늘이 아니면 날짜도)
+    private func row(_ v: NSView, cat: Bool, ts: Double? = nil) -> NSView {
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let r = NSStackView(views: cat ? [v, spacer] : [spacer, v])
+        var views = [v]
+        if let ts {
+            let d = Date(timeIntervalSince1970: ts)
+            let f = DateFormatter(); f.locale = Locale(identifier: "ko_KR")
+            f.dateFormat = Calendar.current.isDateInToday(d) ? "a h:mm" : "M/d a h:mm"
+            let t = NSTextField(labelWithString: f.string(from: d))
+            t.font = .systemFont(ofSize: 9)
+            t.textColor = Self.cream.withAlphaComponent(0.45)
+            t.setContentCompressionResistancePriority(.required, for: .horizontal)
+            views = cat ? [v, t] : [t, v]
+        }
+        let r = NSStackView(views: cat ? views + [spacer] : [spacer] + views)
         r.orientation = .horizontal
-        r.alignment = .top
+        r.alignment = .bottom
+        r.spacing = 4
         return r
     }
 

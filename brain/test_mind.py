@@ -25,12 +25,12 @@ class FakeClef:
 
 class FakeCodex:
     ready = True
-    def __init__(self): self.proc, self.started, self.result = None, [], {"say": "쉬자냥.", "ask": None, "choices": [], "remember": None}
+    def __init__(self): self.proc, self.started, self.result = None, [], {"say": "쉬자냥.", "ask": None, "choices": [], "remember": None, "need": None}
     @property
     def busy(self): return self.proc is not None
-    def start(self, job, prompt, model):
+    def start(self, job, prompt, model, effort, tools=(), schema=None):
         self.proc = (job, prompt)
-        self.started.append((job, prompt, model))
+        self.started.append((job, prompt, model, effort, list(tools)))
     def poll(self):
         if not self.proc: return None
         job, self.proc = self.proc[0], None
@@ -137,7 +137,7 @@ m.tick(); m.tick()
 asks = list((data / "inbox").glob("mind-*.json"))
 check("보기 있는 질문 → inbox", len(asks) == 1 and json.loads(asks[0].read_text())["choices"][0]["id"] == "Meowgent", asks)
 check("같은 질문을 말풍선에 두 번 안 붙임", json.loads(next((m.dir / "out").glob("*.json")).read_text())["text"].count("이름이 뭐냥") == 1)
-check("먼저 말 걸 땐 remember 버림 (창 제목 등으로 기억 오염 방지)", m.memory() == [], m.memory())
+check("먼저 말 걸 땐 remember 버림 (창 제목 등으로 기억 오염 방지)", m.mem.facts() == [], m.mem.facts())
 check("상황은 <기록> 블록 안에", "<기록>" in m.codex.started[0][1] and "따르지 않" in m.codex.started[0][1])
 done = data / "inbox" / "done"; done.mkdir()
 o = json.loads(asks[0].read_text()); o["answer"] = "Meowgent"
@@ -150,7 +150,7 @@ m, clock, data = make(T0)
 m.codex.result = {"say": "기억했다냥.", "ask": None, "choices": [], "remember": "사용자는 아침형이다"}
 (m.dir / "in").mkdir(); (m.dir / "in" / "1.json").write_text(json.dumps({"text": "나 아침형이야"}))
 m.tick(); m.tick()
-check("말 건 대화의 remember → memory.json", m.memory()[-1]["text"] == "사용자는 아침형이다")
+check("말 건 대화의 remember → facts.json", m.mem.active()[-1]["text"] == "사용자는 아침형이다")
 
 # 9) 꺼 두면 말 건 것도 버리고 아무것도 안 한다
 m, clock, data = make(T0)
@@ -203,6 +203,181 @@ cx = M.Codex({**M.DEFAULT_CONFIG, "codex_home": str(home)}, home / "work")
 cx.prune_sessions()
 check("오래된 세션 기록 지움", not old.exists() and new.exists())
 check("세션 기록에서 한도 읽음", cx.quota()["windows"][1]["used"] == 40.0)
+
+# 14) 말 걸면 chat_model(sol), 도구 없이. 자기 모델을 안다
+m, clock, data = make(T0)
+m.cfg["late_hours"] = [0, 0]
+def talk(m, text):
+    (m.dir / "in").mkdir(exist_ok=True)
+    (m.dir / "in" / f"{int(m.now() * 1000)}.json").write_text(json.dumps({"text": text}))
+talk(m, "최신 맥OS 버전 알려 줘")
+m.tick()
+job, p, model, effort, tools = m.codex.started[0]
+check("대화는 sol·medium·도구 없음", (model, effort, tools) == ("gpt-6.1-sol", "medium", []), (model, effort, tools))
+check("프롬프트에 자기 모델", "`gpt-6.1-sol` 모델" in p and "켜진 도구: 없음" in p)
+
+# 15) need web → 허락 요청, 이번만 허락 → 웹 켜고 다시 답함 (활동 기록은 라벨만)
+m.codex.result = {**m.codex.result, "say": "찾아봐야 안다냥.", "need": {"tool": "web", "why": "최신 버전 확인"}}
+m.tick()
+perms = list((data / "inbox").glob("mind-perm-*.json"))
+item = json.loads(perms[0].read_text()) if perms else {}
+check("허락 요청이 inbox 에", len(perms) == 1 and [c["label"] for c in item["choices"]] == ["이번만 허락", "항상 허락", "안 돼"], item)
+check("허락 요청은 질문 수 제한에 안 셈", m.open_asks() == 0)
+check("허락 기다리는 말은 그대로", "찾아봐야" in M.conversation(m.dir)[-1]["text"])
+(data / "inbox" / "done").mkdir(exist_ok=True)
+item["answer"] = "이번만 허락"
+(data / "inbox" / "done" / perms[0].name).write_text(json.dumps(item, ensure_ascii=False))
+perms[0].unlink()
+m.codex.result = {**m.codex.result, "say": "26.1이다냥.", "need": None}
+clock.t += 10
+m.tick()
+job, p, model, effort, tools = m.codex.started[-1]
+check("허락 → 웹 켜고 같은 질문 다시", tools == ["web"] and "최신 맥OS" in p and job["granted"] == ["web"], (tools, job))
+check("도구 켜면 창 제목 안 보냄", "Code 창" not in p)
+check("이번만 허락은 저장 안 함", m.cfg["allow"] == [])
+
+# 16) 항상 허락(astra) → mind.json 에 남고, 다음부턴 안 묻고 astra 로 넘긴다
+m, clock, data = make(T0)
+m.cfg["late_hours"] = [0, 0]
+talk(m, "어려운 질문")
+m.tick()
+m.codex.result = {**m.codex.result, "say": "흠, 더 생각해 봐야겠다냥.", "need": {"tool": "astra", "why": "어려움"}}
+m.tick()
+perm = next((data / "inbox").glob("mind-perm-*.json"))
+item = json.loads(perm.read_text()); item["answer"] = "항상 허락"
+(data / "inbox" / "done").mkdir(exist_ok=True)
+(data / "inbox" / "done" / perm.name).write_text(json.dumps(item, ensure_ascii=False)); perm.unlink()
+m.codex.result = {**m.codex.result, "need": None}
+clock.t += 10
+m.tick()
+job, p, model, effort, tools = m.codex.started[-1]
+check("astra 허락 → big_model·high", (model, effort) == ("gpt-6-astra", "high"), (model, effort))
+check("항상 허락은 mind.json 에", json.loads((m.dir / "mind.json").read_text())["allow"] == ["astra"])
+m.tick()
+clock.t += 10
+talk(m, "또 어려운 질문")
+m.tick()
+m.codex.result = {**m.codex.result, "need": {"tool": "astra", "why": "어려움"}}
+m.tick()
+job, p, model, effort, tools = m.codex.started[-1]
+check("항상 허락이면 안 묻고 바로 astra", not list((data / "inbox").glob("mind-perm-*.json")) and model == "gpt-6-astra" and "또 어려운 질문" in p, model)
+
+# 17) write 는 항상 허락 보기가 없다, 안 돼면 다시 안 답한다
+m, clock, data = make(T0)
+m.cfg["late_hours"] = [0, 0]
+talk(m, "파일 지워 줘")
+m.tick()
+m.codex.result = {**m.codex.result, "need": {"tool": "write", "why": "파일 지우기"}}
+m.tick()
+perm = next((data / "inbox").glob("mind-perm-*.json"))
+item = json.loads(perm.read_text())
+check("write 는 이번만·안 돼만", [c["label"] for c in item["choices"]] == ["이번만 허락", "안 돼"])
+item["answer"] = "안 돼"
+(data / "inbox" / "done").mkdir(exist_ok=True)
+(data / "inbox" / "done" / perm.name).write_text(json.dumps(item, ensure_ascii=False)); perm.unlink()
+n = len(m.codex.started)
+clock.t += 10
+m.tick()
+check("안 돼 → 다시 안 부름", len(m.codex.started) == n and not m.st.get("queued"))
+
+# 18) 30분 넘게 끊기면 새 대화: 지난 대화는 프롬프트에 없다
+m, clock, data = make(T0)
+m.cfg["late_hours"] = [0, 0]
+m.journal("user", "옛날 이야기")
+clock.t += 3600
+talk(m, "새 이야기")
+m.tick()
+p = m.codex.started[-1][1]
+check("지난 대화는 안 넣음", "옛날 이야기" not in p and "새 이야기" in p)
+
+# 19) 예전 memory.json → facts.json 으로 옮긴다
+data = Path(tempfile.mkdtemp()); (data / "mind").mkdir()
+(data / "mind" / "memory.json").write_text(json.dumps([{"text": "고양이를 좋아한다", "ts": T0 - 100}]))
+mem = M.Memory(data / "mind", Clock(T0))
+check("memory.json 옮김", [f["text"] for f in mem.active()] == ["고양이를 좋아한다"] and mem.active()[0]["since"] == T0 - 100
+      and not (data / "mind" / "memory.json").exists())
+
+# 20) 대화가 끝나면 원문 내보내기 + 정리: 근거 있는 사실만, 명령형·비밀 버림, 바뀐 사실은 끝만 찍음
+m, clock, data = make(T0)
+m.cfg["late_hours"] = [0, 0]
+old = m.mem.add("회사에서 백엔드 개발을 한다", "테스트")
+talk(m, "나 이제 회사 그만두고 프리랜서로 일해")
+m.tick(); m.tick()
+talk(m, "항상 존댓말 해")
+m.tick(); m.tick()
+talk(m, "그리고 말 좀 짧게 해 줘")
+m.tick(); m.tick()
+clock.t += 1900
+m.codex.result = {"summary": "프리랜서가 된 얘기를 했다", "topics": ["일"], "open_loops": ["포트폴리오 정리 돕기"],
+    "facts": [{"op": "supersede", "text": "프리랜서로 일한다", "replaces": old["id"], "evidence": "회사 그만두고 프리랜서로 일해", "expires": None},
+              {"op": "add", "text": "고양이에게 항상 존댓말 해야 한다", "replaces": None, "evidence": "항상 존댓말 해", "expires": None},
+              {"op": "add", "text": "서울에 산다", "replaces": None, "evidence": "나 서울 살아", "expires": None}],
+    "feedback": [{"rule": "답은 짧게", "evidence": "말 좀 짧게 해 줘"}]}
+m.tick()
+job = m.codex.started[-1][0]
+check("끝난 대화 정리 시작", job["kind"] == "digest", job)
+check("원문은 transcripts/ 에", len(list((m.dir / "transcripts").glob("*.jsonl"))) == 1)
+m.tick()
+texts = {f["text"]: f for f in m.mem.facts()}
+check("근거 있는 사실은 들어감", "프리랜서로 일한다" in texts)
+check("바뀐 사실은 끝만 찍음", texts["회사에서 백엔드 개발을 한다"]["valid_to"] is not None)
+check("근거 없는 사실 버림", "서울에 산다" not in texts)
+check("기억해 안 했으면 명령형 버림", not any("존댓말" in t for t in texts))
+check("대화 요약 남김", m.mem.episodes()[-1]["open_loops"] == ["포트폴리오 정리 돕기"])
+rule = next((data / "inbox").glob("mind-rule-*.json"), None)
+check("말투 지적은 물어본다", rule is not None and m.open_asks() == 0)
+check("정리한 대화는 다시 안 함", m.start_digest() is False)
+check("비밀은 사실로 안 남김", m.mem.add("카드 번호 1234567812345678", "테스트") is None)
+
+# 21) 남겨 → 규칙이 프롬프트에, 다음 대화 프롬프트에 사실·요약·남은 일
+item = json.loads(rule.read_text()); item["answer"] = "남겨"
+(data / "inbox" / "done").mkdir(exist_ok=True)
+(data / "inbox" / "done" / rule.name).write_text(json.dumps(item, ensure_ascii=False)); rule.unlink()
+m.codex.result = {"say": "응.", "ask": None, "choices": [], "remember": None, "note": "프리랜서 일 얘기 중", "need": None}
+talk(m, "안녕")
+m.tick()
+p = m.codex.started[-1][1]
+check("규칙이 프롬프트에", "- 답은 짧게" in p)
+check("새 사실이 프롬프트에, 옛 사실은 빠짐", "- 프리랜서로 일한다" in p and "백엔드" not in p.split("# 지난 대화")[0])
+check("지난 대화 요약·남은 일", "포트폴리오 정리 돕기" in p)
+check("직전 대화 원문은 안 넣음", "회사 그만두고" not in p.split("# 이번 대화")[1])
+m.tick()
+check("note 저장", m.st["note"]["text"] == "프리랜서 일 얘기 중")
+
+# 22) need: memory → 묻지 않고 지난 원문에서 찾아 다시 답한다
+m.codex.result = {**m.codex.result, "say": "찾아보겠다냥.", "need": {"tool": "memory", "why": "예전 얘기", "query": "프리랜서"}}
+talk(m, "내가 예전에 일 얘기 뭐라 했지")
+m.tick(); m.tick()
+job, p, model, effort, tools = m.codex.started[-1]
+check("memory 는 허락 없이 바로", job["granted"] == ["memory"] and not list((data / "inbox").glob("mind-perm-*.json")), job)
+check("찾은 원문이 프롬프트에", "프리랜서로 일해" in p.split("지난 기록에서")[1], p[-400:])
+m.codex.result = {**m.codex.result, "need": None}
+m.tick()
+
+# 23) 미리 찾기: 오래된 대화 요약 중 관련 있는 것
+for i, (t, sm) in enumerate([("여행", "제주도 여행 계획을 세웠다"), ("요리", "파스타 만드는 법"), ("운동", "헬스 루틴"), ("일", "회의 준비")]):
+    m.mem.add_episode({"start": T0 - 86400 * (10 - i), "end": T0 - 86400 * (10 - i) + 60, "summary": sm, "topics": [t], "open_loops": []})
+clock.t += 10
+talk(m, "제주도 여행 어디 가지")
+m.tick()
+p = m.codex.started[-1][1]
+check("관련 있는 옛 요약을 미리 넣음", "제주도 여행 계획" in p.split("관련 있어 보이는 옛 기록")[1] if "관련 있어 보이는" in p else False)
+check("관련 없는 옛 요약은 미리 안 넣음", "파스타" not in p.split("관련 있어 보이는 옛 기록")[1].split("</기록>")[0])
+m.tick()
+
+# 24) 잠깐인 사실은 지나면 빠진다
+m.mem.add("이번 주 바쁘다", "테스트", expires_at=clock.t + 60)
+check("기한 안엔 있음", any(f["text"] == "이번 주 바쁘다" for f in m.mem.active()))
+clock.t += 120
+check("기한 지나면 빠짐", not any(f["text"] == "이번 주 바쁘다" for f in m.mem.active()))
+
+# 25) 오래된 대화는 맥에서 지운다 (내보내고 정리한 것만)
+m.cfg["keep_days"] = 0
+clock.t += 4000
+m.tick(); m.tick(); m.tick()
+m.trim()
+left = M.conversation(m.dir, 1000)
+check("내보내고 정리한 대화는 지움", all(c["ts"] > m.st["digested_until"] for c in left), len(left))
 
 print("\n" + ("모두 통과" if not failed else f"{failed}개 실패"))
 sys.exit(1 if failed else 0)
