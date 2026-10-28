@@ -60,6 +60,7 @@ cd ../brain && ./install.sh       # (선택) brain 을 launchd 에 등록
 | `mind/` | 말하는 고양이 설정·대화·기억 (docs/CAT_MIND.md) |
 | `brain.db`, `wiki/now.md`, `wiki/timeline/` | brain 판단 결과 |
 | `config.json` | 차단 앱·도메인 추가분, 텍스트 커밋 간격 등 |
+| `inbox/`, `inbox/done/` | 고양이 얼굴 옆 ! · ? 항목과 답 ([docs/INBOX.md](docs/INBOX.md)) |
 | `shortcuts.json`, `notices.jsonl`, `memos.jsonl`, `feedback.jsonl`, `reset_passes.json` | 단축키 힌트 기록, 고양이 알림·메모·피드백, 직접 적은 리셋권 |
 | `actlog.log` | 앱 로그 (5MB 넘으면 교체) |
 
@@ -79,6 +80,7 @@ cd ../brain && ./install.sh       # (선택) brain 을 launchd 에 등록
 | [collector/README.md](collector/README.md) | 앱 사용법, 기록하는 것/안 하는 것, 권한, 데이터 |
 | [docs/RELEASE.md](docs/RELEASE.md) | 배포 절차, 공증, 공개 전 체크리스트 |
 | [docs/WINDOWS_PORT.md](docs/WINDOWS_PORT.md) | 윈도우 이식 모듈 대응표·스택 비교·단계 |
+| [docs/INBOX.md](docs/INBOX.md) | 고양이 ! · ? 항목 형식 (다른 도구가 확인할 일·질문을 넣는 법) |
 | [docs/REMINDERS.md](docs/REMINDERS.md) | 한도·리셋권, 맥 상태(CPU·메모리·발열·에너지) 알림 규칙과 피로 줄이기 근거 |
 | [docs/SHORTCUT_HINTS.md](docs/SHORTCUT_HINTS.md) | 단축키 힌트 조사와 규칙 |
 | `pet/docs/CAT_MOTION.md` | 고양이다운 자세·움직임 기준 (비공개 저장소) |

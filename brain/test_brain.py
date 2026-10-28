@@ -71,5 +71,36 @@ check("요약에 활동량 이름", st["활동량"] in ("거의 없음 (보기�
 check("요약에 잠깐 들른 곳", st.get("잠깐 들른 곳") == ["Claude 8초"], st.get("잠깐 들른 곳"))
 check("파일 맥락은 폴더", f.closed[0].ctx[1] == "file:/Users/me/Documents/work/lectures/01_basic", f.closed[0].ctx)
 
+# 7) 모르는 긴 구간은 inbox 에 질문으로 (실제 DB·폴더 대신 메모리 DB와 임시 폴더)
+import json, sqlite3, tempfile, time
+from pathlib import Path
+B.INBOX = Path(tempfile.mkdtemp()) / "inbox"
+B.LOG = B.INBOX.parent / "brain.log"
+b = B.Brain.__new__(B.Brain)
+b.cfg, b.projects, b.next_ask = CFG, {"meowgent": "Meowgent 만들기: 수집기"}, 0
+b.db = sqlite3.connect(":memory:")
+b.db.executescript(B.SCHEMA)
+now = time.time()
+def episode(eid, minutes, answer, conf):
+    b.db.execute("INSERT INTO episodes(id,start,end,status,app,title,summary,summary_hash,judged_hash) VALUES(?,?,?,'closed','Claude','Claude',?,'h','h')",
+                 (eid, now - 7200, now - 7200 + minutes * 60, json.dumps({"AI에게 한 질문": [f"질문{eid}"]})))
+    b.db.execute("INSERT INTO decisions VALUES(?,?,?,?,?,?,?,?,?)", (eid, B.QSET, "project", answer, conf, "{}", now, 0, 1))
+episode(1, 20, "none", 0.2)      # 길고 모름 → 묻는다
+episode(2, 5, "none", 0.2)       # 짧다
+episode(3, 20, "meowgent", 0.9)  # 안다
+episode(4, 20, "other", 0.8)     # 새 작업 → 묻는다
+b.ask_unclear(now)
+asked = sorted(f.name for f in B.INBOX.glob("*.json"))
+check("길고 모르는 구간만 질문", asked == ["brain-ep-1.json", "brain-ep-4.json"], asked)
+q = json.loads((B.INBOX / "brain-ep-1.json").read_text())
+check("질문 형식", q["kind"] == "ask" and q["level"] == "yellow" and q["choices"][0] == {"id": "meowgent", "label": "Meowgent 만들기"} and "질문1" in q["detail"], q)
+(B.INBOX / "done").mkdir()
+q.update(answer="meowgent", resolved=now)
+(B.INBOX / "done" / "brain-ep-1.json").write_text(json.dumps(q))
+(B.INBOX / "brain-ep-1.json").unlink()
+b.ask_unclear(now + 61)
+check("답은 labels 로", b.db.execute("SELECT answer FROM labels WHERE episode_id=1").fetchall() == [("meowgent",)])
+check("답한 구간은 다시 안 묻는다", not (B.INBOX / "brain-ep-1.json").exists())
+
 print("\n모두 통과" if not failed else f"\n실패 {failed}건")
 sys.exit(1 if failed else 0)

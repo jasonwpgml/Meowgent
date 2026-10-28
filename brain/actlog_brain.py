@@ -27,6 +27,7 @@ BRAIN_DB = DATA / "brain.db"
 CONFIG = DATA / "brain.json"
 PROJECTS = DATA / "projects.json"
 LOG = DATA / "brain.log"
+INBOX = DATA / "inbox"    # 고양이 얼굴 옆 ! · ? 항목 (docs/INBOX.md)
 
 QSET = "v1"
 
@@ -38,6 +39,8 @@ DEFAULT_CONFIG = {
     "rolling_s": 60,         # 진행 중인 구간을 다시 판단하는 간격
     "accept": 0.7,           # 이 이상이면 확정
     "guess": 0.4,            # 이 이상이면 추정, 미만이면 미분류
+    "ask_min_s": 600,        # 이보다 긴 구간인데 프로젝트를 모르면 고양이가 물어본다 (노란 ?)
+    "ask_open_max": 5,       # 안 답한 질문이 이만큼 쌓이면 더 묻지 않는다
 }
 
 # 처음 실행 때 projects.json 으로 쓰는 초기 목록. 이후엔 그 파일을 고쳐서 관리.
@@ -464,6 +467,7 @@ class Brain:
         self.open_row = None      # 현재 열린 에피소드의 DB id
         self.wiki = Path(os.path.expanduser(self.cfg["wiki_dir"]))
         self.dirty = True
+        self.next_ask = 0
 
     # 상태
     def get(self, key, default=None):
@@ -590,6 +594,57 @@ class Brain:
             done += self.judge_one(eid, final=True)
         return done
 
+    # 사용자에게 묻기 (고양이 ?)
+    def ask_unclear(self, now=None):
+        """최근 3일 중 길었는데 프로젝트를 모르는 구간을 inbox/ 에 질문으로 놓고, 답한 것은 labels 로 가져온다.
+        labels 는 나중에 판단을 고치거나 학습할 재료로 모아 두기만 한다."""
+        now = now or time.time()
+        if now < self.next_ask:
+            return
+        self.next_ask = now + 60
+        done = INBOX / "done"
+        for f in done.glob("brain-ep-*.json") if done.exists() else []:
+            try:
+                o = json.loads(f.read_text())
+                eid = int(o["episode_id"])
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if o.get("answer") and not self.db.execute("SELECT 1 FROM labels WHERE episode_id=? AND question='project'", (eid,)).fetchone():
+                self.db.execute("INSERT INTO labels VALUES(?,?,?,?)", (eid, "project", str(o["answer"]), o.get("resolved") or now))
+        self.db.commit()
+        open_asks = len(list(INBOX.glob("brain-ep-*.json"))) if INBOX.exists() else 0
+        if open_asks >= self.cfg["ask_open_max"]:
+            return
+        rows = self.db.execute(
+            "SELECT e.id, e.start, e.end, e.app, e.title, e.summary FROM episodes e "
+            "JOIN decisions d ON d.episode_id=e.id AND d.qset=? AND d.question='project' "
+            "WHERE e.status='closed' AND e.judged_hash = e.summary_hash AND e.end - e.start >= ? AND e.start > ? "
+            "AND (d.confidence < ? OR d.answer = 'other') "
+            "AND NOT EXISTS (SELECT 1 FROM labels l WHERE l.episode_id=e.id AND l.question='project') "
+            "ORDER BY e.start DESC",
+            (QSET, self.cfg["ask_min_s"], now - 3 * 86400, self.cfg["guess"])).fetchall()
+        choices = [{"id": k, "label": v.split(":")[0].strip()} for k, v in sorted(self.projects.items())]
+        choices += [{"id": "none", "label": "개인 용무·휴식"}, {"id": "other", "label": "목록에 없는 새 작업"}]
+        for eid, st, en, app, title, summary in rows:
+            if open_asks >= self.cfg["ask_open_max"]:
+                break
+            name = f"brain-ep-{eid}.json"
+            if (INBOX / name).exists() or (done / name).exists():
+                continue
+            summ = json.loads(summary or "{}")
+            hint = (summ.get("AI에게 한 질문") or summ.get("검색어") or summ.get("입력한 글", {}).get("예시") or [None])[-1]
+            detail = " · ".join(x for x in [clip(title, 60) if title and title != app else None, clip(hint, 120) if hint else None] if x)
+            t0 = datetime.fromtimestamp(st)
+            item = {
+                "id": name[:-5], "kind": "ask", "level": "yellow", "source": "brain", "episode_id": eid,
+                "text": f"{t0.month}/{t0.day} {t0.strftime('%H:%M')}부터 {fmt_dur(en - st)} {app}에서 한 일은 어느 프로젝트?",
+                "detail": detail or None, "choices": choices, "created": now, "expires": now + 7 * 86400,
+            }
+            write_atomic(INBOX / name, json.dumps(item, ensure_ascii=False, indent=2))
+            os.chmod(INBOX / name, 0o600)
+            open_asks += 1
+            log(f"질문 남김: 구간 {eid} ({app} {fmt_dur(en - st)})")
+
     # 출력
     def label(self, q, ans_conf):
         if not ans_conf:
@@ -695,6 +750,7 @@ def run(loop=True):
     while True:
         b.ingest()
         b.judge_pending(budget=3)
+        b.ask_unclear()
         b.render()
         time.sleep(3)
 

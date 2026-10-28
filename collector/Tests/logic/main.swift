@@ -139,6 +139,23 @@ check("남은 시간 글자", Quota.relText(3 * H + 12 * 60) == "3시간 12분" 
 check("창 이름", Quota.periodName(300) == "5시간" && Quota.periodName(10080) == "주간" && Quota.periodName(43200) == "월")
 
 #if HAS_PET
+// ! · ? 항목: 마감 하루 안이면 빨강으로 올리고, 지난 건 내린다
+let nowTs = 1_000_000.0
+func mk(_ o: [String: Any]) -> PetMark? { PetMark.parse(o, id: "f", now: nowTs) }
+check("항목 기본값", mk(["text": "메일 확인"]).map { !$0.ask && !$0.red && $0.id == "f" } == true)
+check("빈 글은 버림", mk(["text": "  "]) == nil)
+check("모르는 kind 는 버림", mk(["text": "x", "kind": "note"]) == nil)
+check("마감 하루 안이면 빨강", mk(["text": "이력서", "level": "yellow", "due": nowTs + 3600])?.red == true)
+check("마감 멀면 노랑 유지", mk(["text": "이력서", "level": "yellow", "due": nowTs + 3 * 86400])?.red == false)
+check("마감 하루 지나면 내림", mk(["text": "이력서", "due": nowTs - 25 * 3600]) == nil)
+check("expires 지나면 내림", mk(["text": "x", "expires": nowTs - 1]) == nil)
+check("http 아닌 주소는 버림", mk(["text": "x", "url": "file:///etc/passwd"])?.url == nil)
+let ch = mk(["text": "x", "kind": "ask", "choices": ["a", ["id": "b", "label": "비"]]])?.choices ?? []
+check("선택지 두 형식", ch == [.init(id: "a", label: "a"), .init(id: "b", label: "비")], "\(ch)")
+let ordered = [mk(["text": "노랑", "created": 1.0])!, mk(["text": "빨강 늦게", "level": "red", "created": 5.0])!,
+               mk(["text": "빨강 마감", "level": "red", "due": nowTs + 7200])!].sorted(by: PetMark.order).map(\.text)
+check("빨강·마감 먼저", ordered == ["빨강 마감", "빨강 늦게", "노랑"], "\(ordered)")
+
 // 빈자리: 고양이 몸(가운데 ± 50, 높이 100)이 창과 안 겹치는 바닥 구간
 var ts = TerrainScan(floor: Platform(y: 0, x0: 0, x1: 1000, windowID: nil), platforms: [], frontCoversScreen: false,
                      windows: [CGRect(x: 200, y: 50, width: 300, height: 400), CGRect(x: 700, y: 300, width: 200, height: 200)])
