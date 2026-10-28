@@ -6,7 +6,7 @@
 2. 사용자에 대한 정보
 3. 직전 대화와 그 이전 맥락
 
-지금 상태 (2026-10-29): 1단계(Meowgent만)를 만들었다. 대화 원문은 AI Archive Hub를 거쳐 AND에 쌓는다. 맥 쪽은 끝났고 데탑 허브에 파서를 넣는 일이 남았다(아래 "원문을 AND로").
+지금 상태 (2026-10-29): 1단계(Meowgent만)를 만들었고, 대화 원문은 AI Archive Hub를 거쳐 데탑에 쌓인다(아래 "원문을 AND로").
 
 ## 조사 요약
 
@@ -116,9 +116,10 @@ AND 규칙은 기본이 `local_only`다. 원격 LLM으로 보내는 건 ADR-0013
 
 맥의 AI Archive Hub push(`com.ai-archive-hub.push`)는 이 맥의 Claude·Codex 세션을 데탑 허브로 보낸다. 허브는 도구마다 파서가 있다. 데탑 AND는 허브 메시지를 `search_index`의 `hub_message`로 찾는다. 그래서 허브에 `meowgent` 도구를 더하면 고양이 대화 원문이 AND 검색에 들어간다.
 
-- 필요한 변경: 허브 `src/aihub/sources/meowgent.py`(파서), `sources/__init__.py`(등록), `config.py`(`Source("meowgent", ~/Library/Application Support/Meowgent/mind/transcripts)`), 테스트. 맥 클론에서 테스트까지 통과시켰다.
-- **순서가 중요하다.** 데탑 허브의 `receive`는 모르는 도구가 든 묶음을 통째로 거절한다. 맥이 먼저 `meowgent`를 보내면 Claude·Codex 세션 push까지 막힌다. 그래서 데탑 저장소(`D:\Projects\ai-archive-hub`, GitHub origin)에 먼저 넣고, 그다음 맥 config에 Source를 더한다. 맥 클론은 데탑보다 뒤처져 있고 remote가 없다.
-- push 트리거(`WatchPaths`)에 `transcripts/`를 더하면 바로바로 간다. 더하지 않아도 Claude·Codex 세션이 바뀔 때 같이 간다.
+- 허브에 `meowgent` 도구를 더했다: `src/aihub/sources/meowgent.py`(파서), `sources/__init__.py`(등록), `config.py`(`Source("meowgent", ~/Library/Application Support/Meowgent/mind/transcripts)`), 테스트. 데탑 `D:\Projects\ai-archive-hub` main 7b1d28a, 맥 클론 `~/ai-archive-hub` 1906103 (2026-10-29). 데탑 커밋은 GitHub에 아직 안 올렸다(데탑 SSH 세션은 GitHub 인증이 안 된다).
+- **순서가 중요하다.** 데탑 허브의 `receive`는 모르는 도구가 든 묶음을 통째로 거절한다. 허브 코드를 다시 맞출 때도 데탑에 먼저 넣고 맥에 넣는다. 안 그러면 Claude·Codex 세션 push까지 막힌다.
+- push 트리거(`WatchPaths`)에 `transcripts/`를 더했다(`scripts/mac/install-watchpush.sh`). 첫 push로 8개 대화·49개 메시지가 들어갔고 `aihub search "날씨" --tool meowgent`로 찾아진다.
+- AND의 `search_index`는 10-26 이후 다시 만들지 않아서, AND 검색에 고양이 대화가 잡히려면 `rebuild-search-index`가 돌아야 한다 (계획의 A5).
 
 ## 정할 것
 
