@@ -183,7 +183,7 @@ final class MindChat: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         else if let note { s = note }
         else if !bridge.isAlive { s = "고양이 머리(cat_mind)가 안 돌고 있다냥" }
         else if bridge.isThinking || !pending.isEmpty { s = "생각 중이다냥 ···" }
-        else { s = bridge.quotaLine ?? "곁에 있다냥" }
+        else { s = bridge.quotaLine ?? "옆에서 쉬는 중이다냥" }
         status.stringValue = s
     }
 
@@ -205,7 +205,7 @@ final class MindChat: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         if cutOff { add(dayLabel("더 지난 대화는 AND(AI Archive Hub)에 있다냥")) }
         if convo.isEmpty && pending.isEmpty {
-            add(row(bubble("냥! 뭐든 말 걸어 봐라냥.", cat: true), cat: true))
+            add(row(bubble("할 말 있으면 해 봐라냥. 들어는 주겠다냥.", cat: true), cat: true))
         }
         var lastDay = ""
         let day = DateFormatter(); day.locale = Locale(identifier: "ko_KR"); day.dateFormat = "M월 d일 (E)"

@@ -125,7 +125,7 @@ final class MindBridge: NSObject {
                 say?(Line(text: "하암… Codex 한도를 다 써서 졸리다냥. \(Self.when(sleepyUntil!))까지 잠깐 자겠다냥.", urgent: false))
             } else {
                 trick?("stretch")
-                say?(Line(text: "푹 잤다냥! 한도가 다시 찼다냥. 다시 쌩쌩하다냥.", urgent: false))
+                say?(Line(text: "푹 잤다냥. 한도가 다시 찼다냥.", urgent: false))
             }
         }
         wasSleepy = sleepy
@@ -251,11 +251,11 @@ final class MindBridge: NSObject {
         let off = dir.appendingPathComponent("off")
         if isOff {
             try? FileManager.default.removeItem(at: off)
-            say?(Line(text: "다시 말할 수 있다냥. 반갑다냥!", urgent: true))
+            say?(Line(text: "다시 말해 주겠다냥.", urgent: true))
         } else {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             FileManager.default.createFile(atPath: off.path, contents: nil)
-            say?(Line(text: "알겠다냥. 조용히 옆에만 있겠다냥.", urgent: true))
+            say?(Line(text: "알겠다냥. 나도 조용한 게 좋다냥.", urgent: true))
         }
         Log.write("말하는 고양이 \(isOff ? "끔" : "켬")")
     }
