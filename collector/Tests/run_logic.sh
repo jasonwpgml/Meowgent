@@ -7,5 +7,5 @@ S=Sources/ActLog
 PET=()
 [[ -f $S/Pet/PetTerrain.swift ]] && PET=($S/Pet/PetTerrain.swift -D HAS_PET)
 mkdir -p .build
-swiftc -O -o .build/logic-test $S/Context.swift $S/Store.swift $S/AX.swift $S/TextCapture.swift $S/AIResponseCapture.swift $S/QuotaRules.swift $S/ShortcutRules.swift "${PET[@]}" Tests/logic/main.swift -lsqlite3
+swiftc -O -o .build/logic-test $S/Context.swift $S/Store.swift $S/AX.swift $S/TextCapture.swift $S/AIResponseCapture.swift $S/QuotaRules.swift $S/ResourceRules.swift $S/ShortcutRules.swift "${PET[@]}" Tests/logic/main.swift -lsqlite3
 .build/logic-test

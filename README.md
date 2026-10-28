@@ -79,7 +79,7 @@ cd ../brain && ./install.sh       # (선택) brain 을 launchd 에 등록
 | [collector/README.md](collector/README.md) | 앱 사용법, 기록하는 것/안 하는 것, 권한, 데이터 |
 | [docs/RELEASE.md](docs/RELEASE.md) | 배포 절차, 공증, 공개 전 체크리스트 |
 | [docs/WINDOWS_PORT.md](docs/WINDOWS_PORT.md) | 윈도우 이식 모듈 대응표·스택 비교·단계 |
-| [docs/REMINDERS.md](docs/REMINDERS.md) | 한도·리셋권 알림 규칙과 피로 줄이기 근거 |
+| [docs/REMINDERS.md](docs/REMINDERS.md) | 한도·리셋권, 맥 상태(CPU·메모리·발열·에너지) 알림 규칙과 피로 줄이기 근거 |
 | [docs/SHORTCUT_HINTS.md](docs/SHORTCUT_HINTS.md) | 단축키 힌트 조사와 규칙 |
 | `pet/docs/CAT_MOTION.md` | 고양이다운 자세·움직임 기준 (비공개 저장소) |
 | `pet/docs/CAT_VOICE.md` | 고양이 말투·성격 기준 (비공개 저장소) |

@@ -219,5 +219,54 @@ do {
     check("시크릿 창은 막힘", snap.blocked)
 }
 
+// 맥 상태: 뒤에서 오래 쓰는 앱만, 같은 일은 한 번만
+do {
+    let base = Date(timeIntervalSince1970: 1_000_000)
+    func app(_ name: String, cpu: Double = 1, watts: Double = 0, mem: UInt64 = 0, front: Bool = false) -> Resource.App {
+        Resource.App(key: "/Applications/\(name).app", name: name, cpu: cpu, watts: watts, memBytes: mem, front: front)
+    }
+    func sample(_ apps: [Resource.App], cpu: Double = 20, pressure: Int = 0, thermal: Int = 0,
+                battery: Resource.Battery? = nil, gpu: Double? = nil) -> Resource.Sample {
+        Resource.Sample(at: base, cpu: cpu, cores: 10, apps: apps, memUsed: 50, pressure: pressure, swapBytes: 0,
+                        thermal: thermal, battery: battery, watts: nil, gpu: gpu)
+    }
+    func keys(_ s: Resource.Sample, ignored: Set<String> = []) -> [String] { Resource.alerts(s, ignored: ignored).map(\.key) }
+
+    check("뒤에 있는 앱 CPU", keys(sample([app("Chrome", cpu: 140)])) == ["cpu:/Applications/Chrome.app"])
+    check("앞에 있는 앱은 말 안 함", keys(sample([app("Xcode", cpu: 300, front: true)], cpu: 95)).isEmpty)
+    check("무시한 앱은 말 안 함", keys(sample([app("Docker", cpu: 200)]), ignored: ["/Applications/Docker.app"]).isEmpty)
+    check("여럿이 나눠 꽉 채움", keys(sample([app("A", cpu: 60), app("B", cpu: 50)], cpu: 90)) == ["cpu:total"])
+    check("메모리 빠듯·심각", keys(sample([], pressure: 1)) == ["memory:tight"] && keys(sample([], pressure: 2)) == ["memory:critical"])
+    check("발열 serious 부터", keys(sample([], thermal: 1)).isEmpty && keys(sample([], thermal: 2)) == ["thermal:serious"])
+    let onBat = Resource.Battery(percent: 60, onBattery: true, charging: false, minutesLeft: 45, lowPower: false)
+    let k = keys(sample([app("Slack", watts: 3)], battery: onBat))
+    check("배터리: 전기 먹는 앱·빨리 닳음", k == ["energy:/Applications/Slack.app", "energy:drain"], "\(k)")
+    let plugged = Resource.Battery(percent: 15, onBattery: false, charging: true, minutesLeft: nil, lowPower: false)
+    check("충전 중엔 에너지 알림 없음", keys(sample([app("Slack", watts: 3)], battery: plugged)).isEmpty)
+    var low = onBat; low.percent = 8; low.minutesLeft = nil
+    check("배터리 10% 아래는 급함", Resource.alerts(sample([], battery: low)).map { "\($0.key) \($0.urgent)" } == ["battery:10 true"])
+    check("GPU: 앞 앱이 제일 바쁘면 말 안 함", keys(sample([app("Game", cpu: 150, front: true)], gpu: 99)).isEmpty
+          && keys(sample([app("Game", cpu: 5)], gpu: 99)) == ["gpu:busy"])
+
+    // hold · 한 번만 · 30초 끊김은 이어진 것으로 · 1시간 쿨다운
+    var tr = Resource.Tracker()
+    let hog = Resource.alerts(sample([app("Chrome", cpu: 140)]))
+    check("처음엔 기다림", tr.due(hog, now: base).isEmpty)
+    check("2분엔 아직", tr.due(hog, now: base + 120).isEmpty)
+    check("한 번 끊겨도 이어짐", tr.due([], now: base + 140).isEmpty && tr.due(hog, now: base + 150).isEmpty)
+    let due = tr.due(hog, now: base + 180)
+    check("3분 되면 말함", due.map(\.key) == ["cpu:/Applications/Chrome.app"])
+    tr.markFired(due[0].key, now: base + 180)
+    check("말한 건 다시 안 함", tr.due(hog, now: base + 400).isEmpty && tr.held(hog, now: base + 400).count == 1)
+    _ = tr.due([], now: base + 500)   // 풀림
+    _ = tr.due(hog, now: base + 600)
+    check("다시 생겨도 1시간 안엔 안 함", tr.due(hog, now: base + 900).isEmpty)
+    _ = tr.due([], now: base + 4000)
+    _ = tr.due(hog, now: base + 4000)
+    check("1시간 지나면 다시", tr.due(hog, now: base + 4200).count == 1)
+    check("글자", Resource.duration(130) == "2시간 10분" && Resource.duration(45) == "45분"
+          && Resource.bytes(3_221_225_472) == "3.0GB" && Resource.cores(130) == "1.3")
+}
+
 print(failed == 0 ? "\n모두 통과" : "\n실패 \(failed)건")
 exit(failed == 0 ? 0 : 1)

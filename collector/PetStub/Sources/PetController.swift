@@ -21,7 +21,7 @@ final class PetController: NSObject {
 
     func start() {}
     func onKey() {}
-    func notify(_ text: String, urgent: Bool = false, validUntil: Date? = nil) {
+    func notify(_ text: String, urgent: Bool = false, validUntil: Date? = nil, detail: NoticeDetail? = nil) {
         Log.write("알림 (고양이 없음): " + text.replacingOccurrences(of: "\n", with: " / "))
     }
     func keyHint(_ keys: String, _ title: String) -> Bool { false }

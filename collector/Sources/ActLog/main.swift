@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var pet: PetController?
     let agents = AgentMonitor()
     lazy var quota = QuotaWatch(dataDir: dataDir)
+    let resources = ResourceWatch()
     lazy var shortcuts = ShortcutCoach(dataDir: dataDir)
     lazy var mind = MindBridge(dataDir: dataDir)
     var statusItem: NSStatusItem!
@@ -170,16 +171,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return s.window.map { "\(app) — \(String($0.prefix(40)))" } ?? app
         }
         p.agentSummary = { [weak self] in
-            [self?.agents.summary ?? "", self?.quota.attention ?? "", self?.mind.isOff == false ? self?.mind.quotaLine ?? "" : ""]
+            [self?.agents.summary ?? "", self?.quota.attention ?? "", self?.resources.attention ?? "",
+             self?.mind.isOff == false ? self?.mind.quotaLine ?? "" : ""]
                 .filter { !$0.isEmpty }.joined(separator: "\n")
         }
         p.extraMenu = { [weak self] m in
             self?.mind.addMenuItems(to: m)
             self?.quota.addMenuItems(to: m)
+            self?.resources.addMenuItems(to: m)
             self?.shortcuts.addMenuItems(to: m)
         }
         shortcuts.show = { [weak p] h in p?.keyHint(h.keys, h.title) ?? false }
         quota.notify = { [weak p] n in p?.notify(n.text, urgent: n.urgent, validUntil: n.validUntil) }
+        resources.notify = { [weak p] n in p?.notify(n.text, urgent: n.urgent, validUntil: n.validUntil, detail: n.detail) }
         quota.codexFallback = { [weak self] in self?.agents.codexWindows ?? [] }
         agents.notify = { [weak p] n in p?.notify(n.text, urgent: n.urgent) }
         mind.say = { [weak p] l in p?.notify(l.text, urgent: l.urgent) }
@@ -189,6 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         agents.frontBundle = { Context.shared.snapshot.bundle }
         agents.start()
         quota.start()
+        resources.start()
         p.start()
         pet = p
     }
@@ -238,6 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !input { menu.addItem("입력 모니터링 권한 열기…", #selector(openInputSettings), target: self) }
         menu.addItem(pet?.isHidden == false ? "고양이 숨기기" : "고양이 보이기", #selector(togglePet), target: self)
         if pet != nil { mind.addMenuItems(to: menu, withQuota: true) }
+        resources.addMenuItems(to: menu)
         if pet?.hasToys == true { menu.addItem("🧺 고양이 장난감 치우기", #selector(putToysAway), target: self) }
         menu.addItem("데이터 폴더 열기", #selector(openData), target: self)
         menu.addItem("설정 파일(config.json) 열기", #selector(openConfig), target: self)
