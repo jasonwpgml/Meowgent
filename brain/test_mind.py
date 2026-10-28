@@ -379,5 +379,32 @@ m.trim()
 left = M.conversation(m.dir, 1000)
 check("내보내고 정리한 대화는 지움", all(c["ts"] > m.st["digested_until"] for c in left), len(left))
 
+# 26) 보안: write 는 손으로 allow 에 적어도 안 켜진다, 항상 허락 web·read 는 같이 안 켜진다, 자동으로 다시 답할 땐 맥·웹 허락이 안 따라간다
+data = Path(tempfile.mkdtemp()); (data / "mind").mkdir()
+(data / "mind" / "mind.json").write_text(json.dumps({"allow": ["write", "web", "read"]}))
+m = M.Mind(data=data, clef=FakeClef(), codex=FakeCodex(), now=Clock(T0))
+m.cfg["late_hours"] = [0, 0]
+check("allow 의 write 는 버림", m.cfg["allow"] == ["web", "read"], m.cfg["allow"])
+check("항상 허락 web·read 는 하나만", M.run_tools(["web", "read"], []) == ["web"], M.run_tools(["web", "read"], []))
+check("이번에 read 허락 → 항상 허락 web 은 끔", M.run_tools(["web"], ["read"]) == ["read"])
+check("둘 다 이번에 허락받으면 같이", M.run_tools([], ["read", "web"]) == ["read", "web"])
+talk(m, "내 문서 폴더 정리해 줘")
+m.tick()
+m.codex.result = {**m.codex.result, "say": "읽어 봐야 안다냥.", "need": {"tool": "read", "why": "폴더 보기", "query": ""}}
+m.tick()
+perm = next((data / "inbox").glob("mind-perm-*.json"), None)
+check("웹이 켜진 채로 read 요청 → 항상 허락이어도 묻는다", perm is not None)
+m2, clock2, data2 = make(T0)
+m2.cfg["late_hours"] = [0, 0]
+m2.cfg["allow"] = ["astra"]
+talk(m2, "이 파일 고쳐 줘")
+m2.tick()
+m2.st["queued"] = []
+m2.codex.proc = ({"kind": "chat", "text": "이 파일 고쳐 줘", "granted": ["write"], "tools": ["write"]}, "")
+m2.codex.result = {**m2.codex.result, "say": "어렵다냥.", "need": {"tool": "astra", "why": "어려움", "query": ""}}
+m2.tick()
+job = m2.codex.started[-1][0]
+check("자동으로 astra 넘길 땐 write 허락이 안 따라감", job["granted"] == ["astra"] and m2.codex.started[-1][4] == [], (job, m2.codex.started[-1][4]))
+
 print("\n" + ("모두 통과" if not failed else f"{failed}개 실패"))
 sys.exit(1 if failed else 0)

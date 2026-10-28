@@ -45,6 +45,7 @@ DEFAULT_CONFIG = {
     "allow": [],                     # "항상 허락"한 것 (TOOLS 의 astra·web·read). 나머지는 매번 묻는다
     "timeout_s": 120,
     "tool_timeout_s": 300,           # 도구를 쓰거나 big_model 일 때
+    "write_dirs": ["~/Desktop", "~/Documents", "~/Downloads", "~/dev"],   # write 허락 때 고칠 수 있는 곳 (홈 전체는 안 준다)
     "session_gap_s": 1800,           # 말이 이만큼 끊기면 새 대화. 끝난 대화는 요약해 기억으로 남긴다
     "keep_days": 30,                 # conversation.jsonl·transcripts/ 를 맥에 두는 기간 (원문은 AI Archive Hub 로 간다)
     # 프롬프트 층마다 넣는 최대 글자 수 (docs/CAT_MEMORY.md)
@@ -94,9 +95,24 @@ TOOLS = {
     "astra": "더 똑똑한 모델(astra)에게 물어보기",
     "web": "웹 검색",
     "read": "맥의 파일 읽기·읽기 전용 명령",
-    "write": "맥의 파일 바꾸기·명령 실행 (홈 폴더 안)",
+    "write": "맥의 파일 바꾸기·명령 실행 (write_dirs 안: 데스크탑·문서·다운로드·dev)",
 }
 ALWAYS_OK = {"astra", "web", "read"}
+LOCAL_IO = {"read", "write"}
+
+
+def clash(tool, on):
+    """읽은 걸 검색어로 내보낼 수 있는 조합 (맥 읽기·쓰기 + 웹)"""
+    return (tool == "web" and bool(LOCAL_IO & set(on))) or (tool in LOCAL_IO and "web" in on)
+
+
+def run_tools(allow, granted):
+    """이번 실행에 켤 도구. 이번에 허락받은 건 다 켜고, 항상 허락은 웹과 맥 읽기·쓰기가 같이 켜지지 않을 때만 더한다"""
+    on = set(granted) & (LOCAL_IO | {"web"})
+    for t in ("web", "read"):   # 둘 다 항상 허락이면 맥 내용이 안 닿는 웹을 켠다
+        if t in allow and not clash(t, on):
+            on.add(t)
+    return sorted(on)
 ALLOW_ONCE, ALLOW_ALWAYS, DENY = "이번만 허락", "항상 허락", "안 돼"
 
 SCHEMA = {
@@ -349,7 +365,9 @@ class Codex:
         if {"read", "write"} & set(tools):
             cmd += ["-c", "features.shell_tool=true"]
         if "write" in tools:
-            cmd += ["--add-dir", str(Path.home())]
+            for d in self.cfg["write_dirs"]:
+                if Path(os.path.expanduser(d)).is_dir():
+                    cmd += ["--add-dir", os.path.expanduser(d)]
         cmd.append("-")
         env = {**os.environ, "CODEX_HOME": str(self.home)}
         env["PATH"] = env.get("PATH", "/usr/bin:/bin") + ":/opt/homebrew/bin:/usr/local/bin"
@@ -583,6 +601,7 @@ class Mind:
         os.chmod(self.dir, 0o700)
         self.now = now
         self.cfg = {**DEFAULT_CONFIG, **read_json(self.dir / "mind.json", {})}
+        self.cfg["allow"] = [t for t in self.cfg["allow"] if t in ALWAYS_OK]   # write 는 손으로 적어도 항상 켜지지 않는다
         if not (self.dir / "mind.json").exists():
             write_private(self.dir / "mind.json", json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=2))
         self.sit = Situation(data / "brain.db")
@@ -639,7 +658,8 @@ class Mind:
     def post_perm(self, tool, why, request, granted, query=None):
         """도구를 써도 되는지 묻는다. 허락하면 collect_answers 가 request 를 다시 답하게 줄 세운다"""
         choices = [ALLOW_ONCE, ALLOW_ALWAYS, DENY] if tool in ALWAYS_OK else [ALLOW_ONCE, DENY]
-        self.post_ask(f"🔐 {TOOLS[tool]}: {clip(why, 80)}", choices, "perm", 1800,
+        held = [TOOLS[t].split(" (")[0] for t in granted if t in TOOLS and t != "memory"]
+        self.post_ask(f"🔐 {TOOLS[tool]}: {clip(why, 80)}" + (f" (이미 허락: {', '.join(held)})" if held else ""), choices, "perm", 1800,
                       perm={"tool": tool, "request": request, "granted": granted, "query": query})
         log(f"허락 요청: {tool} ({clip(why, 60)})")
 
@@ -867,7 +887,7 @@ class Mind:
     def reply(self, eps, text, granted=(), query=None):
         """사용자 말에 답한다. granted: 이 말에 대해 허락받은 것 (astra 면 big_model 로, memory 면 query 로 찾은 기록을 붙여)"""
         cfg = self.cfg
-        tools = sorted((set(cfg["allow"]) | set(granted)) - {"astra", "memory"})
+        tools = run_tools(cfg["allow"], granted)
         big = "astra" in granted
         task = f"사용자가 고양이에게 말을 걸었다: \"{clip(text, 600)}\"\n고양이로서 대답한다."
         if set(granted) - {"memory"}:
@@ -878,7 +898,7 @@ class Mind:
             task += f"\n\n# 지난 기록에서 '{clip(query or text, 40)}'로 찾은 것\n<기록>\n" + ("\n".join(found) or "(못 찾음)") + "\n</기록>"
         # 도구를 켤 땐 활동 기록을 라벨만 보낸다: 창 제목 속 글이 검색어·명령으로 새어 나가지 않게
         ctx = self.context(eps, "labels" if tools else None)
-        self.start_codex({"kind": "chat", "text": text, "granted": sorted(granted),
+        self.start_codex({"kind": "chat", "text": text, "granted": sorted(granted), "tools": tools,
                           "timeout": cfg["tool_timeout_s"] if tools or big else cfg["timeout_s"]}, ctx, task,
                          cfg["big_model"] if big else cfg["chat_model"], cfg["big_effort"] if big else cfg["chat_effort"], tools, text)
 
@@ -901,10 +921,13 @@ class Mind:
         ask = clip(res.get("ask"), 120)
         need = res.get("need") if chat and isinstance(res.get("need"), dict) else None
         tool = need and need.get("tool")
-        if tool in TOOLS and tool not in job.get("granted", []) and (tool in ("astra", "memory") or tool not in self.cfg["allow"]):
-            if tool == "memory" or tool in self.cfg["allow"]:   # 맥 안 찾기, astra 항상 허락: 묻지 않고 바로
+        if tool in TOOLS and tool not in job.get("granted", []) and tool not in job.get("tools", []):
+            on = job.get("tools", [])
+            if tool == "memory" or (tool in self.cfg["allow"] and not clash(tool, on)):
+                # 묻지 않고 바로 다시 답한다. 앞서 이 말에 받은 맥·웹 허락은 넘기지 않는다 (다시 물어야 켜진다)
+                carry = {t for t in job.get("granted", []) if t in ("astra", "memory")}
                 self.st.setdefault("queued", []).append({"text": job["text"], "query": need.get("query"),
-                                                         "granted": sorted(set(job.get("granted", [])) | {tool})})
+                                                         "granted": sorted(carry | {tool})})
             else:
                 self.post_perm(tool, str(need.get("why", "")), job["text"], job.get("granted", []), need.get("query"))
         if chat and res.get("note"):

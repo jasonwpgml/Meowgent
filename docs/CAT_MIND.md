@@ -91,8 +91,11 @@ mind/in ◀─ 앱 "💬 말 걸기" ─┘        │
 | `astra` | `big_model`·`big_effort`로 다시 답 | 이번만 · 항상 · 안 돼 |
 | `web` | `-c web_search="live"` | 이번만 · 항상 · 안 돼 |
 | `read` | `-c features.shell_tool=true`, 샌드박스 read-only (네트워크 없음) | 이번만 · 항상 · 안 돼 |
-| `write` | 셸 + `-s workspace-write --add-dir ~` | 이번만 · 안 돼 (항상 없음) |
+| `write` | 셸 + `-s workspace-write`, `--add-dir`는 `write_dirs`(데스크탑·문서·다운로드·dev)만 | 이번만 · 안 돼 (항상 없음) |
 
+- 웹과 맥 읽기·쓰기는 같은 실행에서 둘 다 이번에 허락받았을 때만 같이 켠다. 읽은 내용이 검색어로 나가지 않게 하려는 것이다. 둘 다 항상 허락이면 웹만 켜고, 맥 읽기가 필요하면 다시 묻는다.
+- 묻지 않고 바로 다시 답할 때(memory, 항상 허락한 astra)는 그 말에 앞서 받은 웹·맥 허락을 넘기지 않는다. 홈 전체 쓰기는 주지 않는다(`mind.json`·LaunchAgents·dotfile을 못 고치게).
+- `allow`에 손으로 `write`를 적어도 무시한다.
 - "항상 허락"은 `mind.json`의 `allow`에 남는다. web·read는 그 뒤로 대화마다 켜지고, astra는 sol이 요청하면 묻지 않고 넘긴다. 지우려면 `allow`에서 뺀다.
 - 도구를 켠 실행엔 활동 기록을 `labels` 수준으로만 보낸다. 창 제목 속 글이 검색어나 명령으로 새어 나가지 않게 하려는 것이다. 도구 실행 제한 시간은 `tool_timeout_s`(300초).
 - 2026-10-28 실측: 날씨 질문 → sol이 web 요청 / 웹 켜고 주가 질문 24초 / read 켜고 `ls` 10초.
