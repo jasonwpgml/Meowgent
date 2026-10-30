@@ -285,5 +285,58 @@ do {
           && Resource.bytes(3_221_225_472) == "3.0GB" && Resource.cores(130) == "1.3")
 }
 
+// MARK: 묘전트 자기 사용량
+do {
+    check("브레인 알아봄", Resource.helperPart(args: ["/x/python3", "-I", "/Users/a/Library/Application Support/ActLog/brain/actlog_brain.py", "run"]) == .brain)
+    check("말하는 고양이 알아봄", Resource.helperPart(args: ["python3", "/a/brain/cat_mind.py"]) == .mind)
+    check("다른 python 은 아님", Resource.helperPart(args: ["python3", "/a/server.py"]) == nil)
+    let m = Resource.ownMembers(root: 10, helpers: [20: .mind], parents: [10: 1, 11: 10, 12: 11, 20: 1, 21: 20, 30: 1, 31: 30])
+    check("자식까지 묶음", m[10] == .app && m[12] == .app && m[20] == .mind && m[21] == .mind)
+    check("남의 프로세스는 뺌", m[30] == nil && m[31] == nil)
+    check("순환 부모에도 멈춤", Resource.ownMembers(root: 10, helpers: [:], parents: [40: 41, 41: 40]).isEmpty)
+    let l = Resource.nettopLine("Google Chrome H.123,10,20,")
+    check("nettop 줄", l?.pid == 123 && l?.input == 10 && l?.output == 20)
+    check("nettop 머리글은 무시", Resource.nettopLine(",bytes_in,bytes_out,") == nil && Resource.nettopLine("") == nil)
+    check("크기 글자", Resource.size(512) == "512B" && Resource.size(2048) == "2KB" && Resource.size(1_572_864) == "1.5MB" && Resource.rate(1024) == "1KB/s")
+}
+
+// MARK: 앱 정리
+do {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let h: TimeInterval = 3600
+    func cand(_ id: String = "com.example.app", regular: Bool = true, front: Bool = false, windows: Bool = false,
+              idle: TimeInterval = 8 * h, tracked: TimeInterval = 8 * h, cpu: Double = 0.1, mem: UInt64 = 100_000_000) -> Cleanup.Candidate {
+        Cleanup.Candidate(key: "/Applications/App.app", bundleID: id, name: "App", regular: regular, front: front, hasWindows: windows,
+                          idle: idle, tracked: tracked, avgCPU: cpu, memBytes: mem)
+    }
+    func isAsk(_ v: Cleanup.Verdict) -> Bool { if case .ask = v { return true } else { return false } }
+    func isAuto(_ v: Cleanup.Verdict) -> Bool { if case .auto = v { return true } else { return false } }
+    let ok = Cleanup.Prefs(always: ["/Applications/App.app"])
+    let gb: UInt64 = 2_000_000_000
+    func d(_ c: Cleanup.Candidate, _ p: Cleanup.Prefs = .init(), pressure: Int = 0) -> Cleanup.Verdict { Cleanup.decide(c, pressure: pressure, prefs: p, now: now) }
+
+    check("허락 없으면 자동 없음: 묻기만", isAsk(d(cand())))
+    check("허락 + 창 없음 + 오래 조용 = 자동", isAuto(d(cand(), ok)))
+    check("허락했어도 창 있으면 자동 아님", !isAuto(d(cand(windows: true, mem: gb), ok)))
+    check("허락했어도 CPU 쓰면 자동 아님", !isAuto(d(cand(cpu: 3), ok)))
+    check("허락했어도 덜 오래면 자동 아님", !isAuto(d(cand(idle: 3 * h), ok)))
+    check("허락했어도 메뉴바 앱은 자동 없음", !isAuto(d(cand(regular: false, mem: gb), ok)))
+    check("보호 앱은 건드리지 않음", d(cand("com.apple.TextEdit", mem: gb), ok) == .keep && d(cand("com.anthropic.claudefordesktop", mem: gb)) == .keep)
+    check("보호 목록은 대소문자 무시", Cleanup.isProtected("com.hnc.Discord") && Cleanup.isProtected("") && !Cleanup.isProtected("com.google.Chrome"))
+    check("앞에 있으면 건드리지 않음", d(cand(front: true, mem: gb), ok) == .keep)
+    check("일하는 중이면 묻지 않음", d(cand(windows: true, cpu: 20, mem: gb)) == .keep)
+    check("지켜본 지 얼마 안 되면 판단 안 함", d(cand(tracked: 5 * 60, mem: gb), ok) == .keep)
+    check("항상 두기", d(cand(), Cleanup.Prefs(never: ["/Applications/App.app"])) == .keep)
+    let snooze = Cleanup.Prefs(snoozedUntil: ["/Applications/App.app": now + h])
+    check("이번엔 두기 기간엔 안 물음", d(cand(), snooze) == .keep)
+    check("기간이 지나면 다시", isAsk(d(cand(), Cleanup.Prefs(snoozedUntil: ["/Applications/App.app": now - 1]))))
+    check("자동 앱도 안 꺼졌던 기간엔 다시 안 건드림", d(cand(), Cleanup.Prefs(always: ["/Applications/App.app"], snoozedUntil: ["/Applications/App.app": now + h])) == .keep)
+    check("창 있고 작으면 안 물음", d(cand(windows: true)) == .keep)
+    check("창 있어도 크고 오래 안 쓰면 물음", isAsk(d(cand(windows: true, idle: 3 * h, mem: gb))))
+    check("막 쓴 앱은 안 물음", d(cand(windows: true, idle: 30 * 60, mem: gb)) == .keep)
+    check("메모리 빠듯하면 작아도 물음", isAsk(d(cand(windows: true, idle: 3 * h, mem: 500_000_000), pressure: 1)))
+    check("메뉴바 앱은 많이 쓸 때만 물음", d(cand(regular: false)) == .keep && isAsk(d(cand(regular: false, mem: gb))) && isAsk(d(cand(regular: false, cpu: 40))))
+}
+
 print(failed == 0 ? "\n모두 통과" : "\n실패 \(failed)건")
 exit(failed == 0 ? 0 : 1)

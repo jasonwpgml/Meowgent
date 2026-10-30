@@ -37,6 +37,68 @@ enum Resource {
         var battery: Battery?
         var watts: Double?            // 배터리에서 끌어 쓰는 전력 (배터리로 쓸 때만)
         var gpu: Double?              // 따로 단 GPU 가 있을 때만 0~100 (Apple 칩 내장 GPU 는 안 본다)
+        var everyApp: [String: App] = [:]   // apps 는 상위 몇 개뿐이라, 정리 판단은 이걸 본다
+        var own: Own? = nil
+    }
+
+    // MARK: 묘전트 자신
+
+    /// 묘전트를 이루는 프로세스 묶음. 각자 자식(codex 등)까지 포함한다.
+    enum OwnPart: Int, CaseIterable {
+        case app, brain, mind
+        var title: String { ["앱", "브레인", "말하는 고양이"][rawValue] }
+    }
+
+    struct OwnPartUsage: Equatable { var part: OwnPart; var cpu: Double; var memBytes: UInt64 }
+
+    /// 네트워크는 대시보드가 열려 있는 동안만 잰다. 합계도 연 뒤부터다.
+    struct OwnNet: Equatable {
+        var inRate: Double = 0, outRate: Double = 0
+        var inTotal: UInt64 = 0, outTotal: UInt64 = 0
+        var failed = false
+    }
+
+    struct Own: Equatable {
+        var cpu: Double               // 코어 하나 = 100
+        var memBytes: UInt64
+        var readRate: Double, writeRate: Double       // 초당 바이트
+        var readTotal: UInt64, writeTotal: UInt64     // 지금 떠 있는 프로세스들이 시작한 뒤 합계
+        var processes: Int
+        var parts: [OwnPartUsage]
+        var net: OwnNet? = nil
+        var dataBytes: UInt64? = nil
+    }
+
+    /// 실행 인자로 브레인·말하는 고양이를 알아본다 (둘 다 launchd 가 띄운 python 이라 부모로는 못 찾는다)
+    static func helperPart(args: [String]) -> OwnPart? {
+        for a in args {
+            if a.hasSuffix("/brain/actlog_brain.py") { return .brain }
+            if a.hasSuffix("/brain/cat_mind.py") { return .mind }
+        }
+        return nil
+    }
+
+    /// pid → 어느 묶음인지. 부모를 따라 올라가 가장 가까운 뿌리(앱·도우미)에 붙인다. 뿌리에 안 닿으면 묘전트 것이 아니다.
+    static func ownMembers(root: Int32, helpers: [Int32: OwnPart], parents: [Int32: Int32]) -> [Int32: OwnPart] {
+        var out: [Int32: OwnPart] = [:]
+        for pid in parents.keys {
+            var cur = pid
+            for _ in 0..<32 {
+                if cur == root { out[pid] = .app; break }
+                if let h = helpers[cur] { out[pid] = h; break }
+                guard let up = parents[cur], up != cur else { break }
+                cur = up
+            }
+        }
+        return out
+    }
+
+    /// nettop -x 한 줄 "이름.pid,받은,보낸," → 머리글이나 깨진 줄은 nil. 이름에 점이 있어도 마지막 점 뒤가 pid 다.
+    static func nettopLine(_ line: String) -> (pid: Int32, input: UInt64, output: UInt64)? {
+        let f = line.split(separator: ",", omittingEmptySubsequences: false)
+        guard f.count >= 3, let dot = f[0].lastIndex(of: "."), let pid = Int32(f[0][f[0].index(after: dot)...]),
+              let i = UInt64(f[1]), let o = UInt64(f[2]) else { return nil }
+        return (pid, i, o)
     }
 
     enum Kind: String { case cpu, memory, thermal, energy, gpu }
@@ -182,6 +244,14 @@ enum Resource {
         let gb = Double(b) / 1_073_741_824
         return gb >= 1 ? String(format: "%.1fGB", gb) : "\(Int(Double(b) / 1_048_576))MB"
     }
+
+    /// 작은 값까지 읽히는 크기 (디스크·네트워크용)
+    static func size(_ b: UInt64) -> String {
+        if b < 1024 { return "\(b)B" }
+        if b < 1_048_576 { return "\(Int(Double(b) / 1024))KB" }
+        return String(format: b < 1_073_741_824 ? "%.1fMB" : "%.1fGB", Double(b) / (b < 1_073_741_824 ? 1_048_576 : 1_073_741_824))
+    }
+    static func rate(_ perSecond: Double) -> String { size(UInt64(max(perSecond, 0))) + "/s" }
 
     static func duration(_ minutes: Int) -> String {
         minutes >= 60 ? "\(minutes / 60)시간" + (minutes % 60 > 0 ? " \(minutes % 60)분" : "") : "\(minutes)분"

@@ -193,6 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         agents.frontBundle = { Context.shared.snapshot.bundle }
         agents.start()
         quota.start()
+        resources.dataDir = dataDir
         resources.start()
         p.start()
         pet = p

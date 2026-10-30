@@ -29,6 +29,18 @@ final class ResourceDashboard: NSObject {
     private var appRows: [AppRow] = []
     private let footer = NSTextField(labelWithString: "")
 
+    // 묘전트 자신
+    private let ownTitle = NSTextField(labelWithString: "🐈 묘전트가 쓰는 양")
+    private let ownCount = NSTextField(labelWithString: "")
+    private let own = (cpu: KeyValueRow("CPU"), memory: KeyValueRow("메모리"), diskNow: KeyValueRow("디스크 지금"), diskTotal: KeyValueRow("디스크 합계"),
+                       netNow: KeyValueRow("네트워크 지금"), netTotal: KeyValueRow("네트워크 연 뒤 합계"), data: KeyValueRow("데이터 폴더"))
+    private let ownParts = Resource.OwnPart.allCases.map { KeyValueRow($0.title, dim: true) }
+
+    // 정리 후보
+    private let cleanBox = NSStackView()
+    private let cleanLabel = NSTextField(wrappingLabelWithString: "")
+    private let cleanAuto = NSButton(title: "앞으로 자동 정리", target: nil, action: nil)
+
     static let width: CGFloat = 340
     static let radius: CGFloat = 20
     static let cream = NSColor(srgbRed: 0.95, green: 0.92, blue: 0.85, alpha: 1)
@@ -176,7 +188,38 @@ final class ResourceDashboard: NSObject {
                 r.isHidden = true
             }
         }
+        fillOwn(s.own)
+        fillClean()
         footer.stringValue = (pinned ? "" : "누르면 고정된다냥 · ") + "시스템 프로세스는 목록에 없다 · 2초마다 새로 읽음"
+    }
+
+    private func fillOwn(_ o: Resource.Own?) {
+        guard let o else { return }
+        ownCount.stringValue = "프로세스 \(o.processes)개"
+        own.cpu.value = String(format: "%.1f%%", o.cpu)
+        own.memory.value = Resource.bytes(o.memBytes)
+        own.diskNow.value = "읽기 \(Resource.rate(o.readRate)) · 쓰기 \(Resource.rate(o.writeRate))"
+        own.diskTotal.value = "읽기 \(Resource.size(o.readTotal)) · 쓰기 \(Resource.size(o.writeTotal))"
+        if let n = o.net {
+            own.netNow.value = n.failed ? "읽지 못했다냥" : "받기 \(Resource.rate(n.inRate)) · 보내기 \(Resource.rate(n.outRate))"
+            own.netTotal.value = n.failed ? "–" : "받기 \(Resource.size(n.inTotal)) · 보내기 \(Resource.size(n.outTotal))"
+        } else {
+            own.netNow.value = "읽는 중"
+            own.netTotal.value = "–"
+        }
+        own.data.value = o.dataBytes.map(Resource.size) ?? "재는 중"
+        for r in ownParts { r.isHidden = true }
+        for u in o.parts {
+            ownParts[u.part.rawValue].isHidden = false
+            ownParts[u.part.rawValue].value = String(format: "%.1f%% · ", u.cpu) + Resource.bytes(u.memBytes)
+        }
+    }
+
+    private func fillClean() {
+        guard let p = watch.cleaner.pending else { cleanBox.isHidden = true; return }
+        cleanBox.isHidden = false
+        cleanLabel.stringValue = "🧹 \(p.name): \(p.reason)\n정리할까냥? 저장 안 한 게 있으면 그 앱이 먼저 물어본다냥."
+        cleanAuto.isHidden = !p.canAutomate
     }
 
     static func batteryLine(_ b: Resource.Battery, watts: Double?) -> String {
@@ -284,8 +327,15 @@ final class ResourceDashboard: NSObject {
         footer.textColor = Self.cream.withAlphaComponent(0.45)
         footer.lineBreakMode = .byTruncatingTail
 
-        let views: [NSView] = [header, focusBox, ignoreButton, rows.cpu, rows.memory, rows.thermal, rows.energy, rows.gpu,
-                               Self.separator(), appsTitle, colHead] + appRows + [footer]
+        ownTitle.font = .systemFont(ofSize: 11, weight: .semibold)
+        ownTitle.textColor = Self.cream.withAlphaComponent(0.7)
+        ownCount.font = .systemFont(ofSize: 10)
+        ownCount.textColor = Self.cream.withAlphaComponent(0.45)
+        let ownHead = NSStackView(views: [ownTitle, NSView(), ownCount])
+        let ownRows: [NSView] = [own.cpu, own.memory, own.diskNow, own.diskTotal, own.netNow, own.netTotal, own.data] + ownParts
+
+        let views: [NSView] = [header, focusBox, ignoreButton, buildCleanBox(), rows.cpu, rows.memory, rows.thermal, rows.energy, rows.gpu,
+                               Self.separator(), appsTitle, colHead] + appRows + [Self.separator(), ownHead] + ownRows + [footer]
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -293,6 +343,8 @@ final class ResourceDashboard: NSObject {
         stack.setCustomSpacing(4, after: appsTitle)
         stack.setCustomSpacing(4, after: colHead)
         for r in appRows { stack.setCustomSpacing(3, after: r) }
+        stack.setCustomSpacing(4, after: ownHead)
+        for r in ownRows { stack.setCustomSpacing(3, after: r) }
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 12, right: 16)
         for v in views where v !== ignoreButton {
             v.widthAnchor.constraint(equalToConstant: Self.width - 32).isActive = true
@@ -301,6 +353,41 @@ final class ResourceDashboard: NSObject {
         stack.widthAnchor.constraint(equalToConstant: Self.width).isActive = true
         return stack
     }
+
+    private func buildCleanBox() -> NSView {
+        cleanLabel.font = .systemFont(ofSize: 12)
+        cleanLabel.textColor = Self.cream
+        cleanLabel.preferredMaxLayoutWidth = Self.width - 56
+        func button(_ title: String, _ sel: Selector) -> NSButton {
+            let b = NSButton(title: title, target: self, action: sel)
+            b.controlSize = .small
+            if #available(macOS 26, *) { b.bezelStyle = .glass } else { b.bezelStyle = .rounded }
+            return b
+        }
+        cleanAuto.target = self
+        cleanAuto.action = #selector(cleanAlways)
+        cleanAuto.controlSize = .small
+        if #available(macOS 26, *) { cleanAuto.bezelStyle = .glass } else { cleanAuto.bezelStyle = .rounded }
+        let first = NSStackView(views: [button("정리하기", #selector(cleanNow)), cleanAuto])
+        let second = NSStackView(views: [button("이번엔 두기", #selector(cleanLater)), button("항상 두기", #selector(cleanNever))])
+        first.spacing = 6
+        second.spacing = 6
+        cleanBox.orientation = .vertical
+        cleanBox.alignment = .leading
+        cleanBox.spacing = 6
+        for v in [cleanLabel, first, second] { cleanBox.addArrangedSubview(v) }
+        cleanBox.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
+        cleanBox.wantsLayer = true
+        cleanBox.layer?.cornerRadius = 10
+        cleanBox.layer?.backgroundColor = Self.calm.withAlphaComponent(0.14).cgColor
+        cleanBox.isHidden = true
+        return cleanBox
+    }
+
+    @objc private func cleanNow() { watch.cleaner.answer(.quit) }
+    @objc private func cleanAlways() { watch.cleaner.answer(.quitAndAutomate) }
+    @objc private func cleanLater() { watch.cleaner.answer(.later) }
+    @objc private func cleanNever() { watch.cleaner.answer(.never) }
 
     @objc private func closePressed() { close() }
 
@@ -418,6 +505,31 @@ private final class Sparkline: NSView {
         color.withAlphaComponent(0.9).setStroke()
         p.stroke()
     }
+}
+
+/// 이름 ── 값 한 줄
+private final class KeyValueRow: NSStackView {
+    private let valueLabel = NSTextField(labelWithString: "")
+    var value: String {
+        get { valueLabel.stringValue }
+        set { valueLabel.stringValue = newValue }
+    }
+
+    init(_ title: String, dim: Bool = false) {
+        super.init(frame: .zero)
+        let name = NSTextField(labelWithString: dim ? "  " + title : title)
+        name.font = .systemFont(ofSize: 11)
+        name.textColor = ResourceDashboard.cream.withAlphaComponent(dim ? 0.45 : 0.7)
+        valueLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        valueLabel.textColor = ResourceDashboard.cream.withAlphaComponent(dim ? 0.55 : 0.9)
+        valueLabel.alignment = .right
+        valueLabel.lineBreakMode = .byTruncatingHead
+        valueLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        name.setContentCompressionResistancePriority(.required, for: .horizontal)
+        setViews([name, NSView(), valueLabel], in: .leading)
+        spacing = 6
+    }
+    required init?(coder: NSCoder) { fatalError() }
 }
 
 /// 앱 한 줄: 이름 · CPU · 메모리 · 전력
