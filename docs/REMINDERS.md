@@ -98,7 +98,7 @@ CodexBar는 Claude "Limit resets"와 Grok 리셋권을 메모리에만 들고 �
 - 묻기는 1시간에 하나까지, 자리에 있을 때만(입력 5분 안). 30분 동안 답이 없으면 끄지 않고 3일 미룬다. 맥 상태 알림을 끄면 묻기도 멈추고, 메뉴에서 정리 제안을 끄면 자동까지 멈춘다.
 - 말풍선을 누르면 대시보드에서 고른다: 정리하기 · 앞으로 자동 정리 · 이번엔 두기 · 항상 두기. 메뉴 › 🖥️ 맥 상태 › 🧹 앱 정리에서도 같고, 자동·항상 두기 해제와 최근 정리한 앱 다시 열기도 여기서 한다.
 - 시간 기준 조절: `defaults write io.github.jasonwpgml.meowgent cleanupAskIdleHours -float 2`, `cleanupQuietIdleHours`.
-- 외부로 보내는 것 없음. 앱별 마지막 사용 시각만 UserDefaults(`cleanupLastUsed`)에 남는다.
+- 외부로 보내는 것 없음. 앱별 마지막 사용 시각은 활동 기록이 켜져 있을 때만 UserDefaults(`cleanupLastUsed`)에 남고(앱마다 최신값 하나, 30일 지나면 삭제), 기록을 끈 동안이나 정리 제안을 끄면 지운다. 이때는 메모리에만 두고, 다시 시작하면 그때부터 다시 잰다.
 
 ## 참고
 

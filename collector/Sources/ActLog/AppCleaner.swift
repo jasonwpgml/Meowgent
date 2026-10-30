@@ -49,9 +49,17 @@ final class AppCleaner: NSObject {
         get { defaults.dictionary(forKey: "cleanupSnoozed") as? [String: Date] ?? [:] }
         set { defaults.set(newValue, forKey: "cleanupSnoozed") }
     }
-    private var lastUsed: [String: Date] {
-        get { defaults.dictionary(forKey: "cleanupLastUsed") as? [String: Date] ?? [:] }
-        set { defaults.set(newValue, forKey: "cleanupLastUsed") }
+    /// 앱별 마지막 사용 시각. 활동 기록이 켜져 있을 때만 디스크에 남긴다 ("고양이만"은 아무것도 저장하지 않는다는 약속).
+    /// 꺼져 있으면 메모리에만 두므로 다시 시작하면 그때부터 다시 잰다 (덜 오래 안 쓴 것으로 보니 안전한 쪽이다).
+    private lazy var lastUsed: [String: Date] = defaults.dictionary(forKey: Self.lastUsedKey) as? [String: Date] ?? [:]
+    private static let lastUsedKey = "cleanupLastUsed"
+    private static let lastUsedKeep: TimeInterval = 30 * 86400
+
+    private func saveLastUsed() {
+        guard !Context.shared.snapshot.paused, !isOff else { defaults.removeObject(forKey: Self.lastUsedKey); return }
+        let cutoff = Date().addingTimeInterval(-Self.lastUsedKeep)
+        lastUsed = lastUsed.filter { $0.value > cutoff }
+        defaults.set(lastUsed, forKey: Self.lastUsedKey)
     }
     /// 시간 기준은 defaults 로 조절할 수 있다 (시간 단위)
     private var limits: Cleanup.Limits {
@@ -63,15 +71,15 @@ final class AppCleaner: NSObject {
     }
 
     func start() {
+        saveLastUsed()   // 기록을 끈 채 시작했다면 남아 있던 것도 지운다
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(activated(_:)),
                                                           name: NSWorkspace.didActivateApplicationNotification, object: nil)
     }
 
     @objc private func activated(_ n: Notification) {
         guard let path = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleURL?.path else { return }
-        var m = lastUsed
-        m[path] = Date()
-        lastUsed = m
+        lastUsed[path] = Date()
+        saveLastUsed()
         if pending?.key == path { resolve() }   // 다시 쓰기 시작했으면 물을 일이 없다
     }
 
@@ -104,7 +112,7 @@ final class AppCleaner: NSObject {
             return (Cleanup.Candidate(key: url.path, bundleID: app.bundleIdentifier ?? "", name: app.localizedName ?? stat.name,
                                       regular: app.activationPolicy == .regular, front: app.isActive,
                                       hasWindows: windows.contains(app.processIdentifier),
-                                      idle: s.at.timeIntervalSince(max(used[url.path] ?? launched, launched)),
+                                      idle: s.at.timeIntervalSince(max(used[url.path] ?? seen, launched)),
                                       tracked: s.at.timeIntervalSince(seen),
                                       avgCPU: avgCPU[url.path]?.value ?? stat.cpu, memBytes: stat.memBytes), app)
         }
@@ -249,7 +257,11 @@ final class AppCleaner: NSObject {
     @objc private func menuAutomate() { answer(.quitAndAutomate) }
     @objc private func menuLater() { answer(.later) }
     @objc private func menuNever() { answer(.never) }
-    @objc private func toggleOff() { isOff.toggle() }
+    @objc private func toggleOff() {
+        isOff.toggle()
+        if isOff { lastUsed = [:] }
+        saveLastUsed()
+    }
 
     @objc private func removeAlways(_ sender: NSMenuItem) {
         guard let k = sender.representedObject as? String else { return }
