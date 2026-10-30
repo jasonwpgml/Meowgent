@@ -262,6 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         store.write(Event("lifecycle", payload: ["event": "pause", "minutes": minutes ?? -1]), force: true)
         resumeTimer?.invalidate()
         if minutes == nil { UserDefaults.standard.set(false, forKey: "recordingEnabled") }
+        resources.cleaner.recordingChanged()
         if let minutes {
             resumeTimer = Timer.scheduledTimer(withTimeInterval: minutes * 60, repeats: false) { [weak self] _ in self?.resume() }
         }
@@ -275,6 +276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         resumeTimer?.invalidate()
         UserDefaults.standard.set(true, forKey: "recordingEnabled")
         Context.shared.update { $0.paused = false }
+        resources.cleaner.recordingChanged()
         store.write(Event("lifecycle", payload: ["event": "resume"]), force: true)
         updateStatusIcon()
     }
