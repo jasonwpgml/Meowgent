@@ -48,7 +48,7 @@ DEFAULT_CONFIG = {
     "write_dirs": ["~/Desktop", "~/Documents", "~/Downloads", "~/dev"],   # write 허락 때 고칠 수 있는 곳 (홈 전체는 안 준다)
     "session_gap_s": 1800,           # 말이 이만큼 끊기면 새 대화. 끝난 대화는 요약해 기억으로 남긴다
     "keep_days": 30,                 # conversation.jsonl·transcripts/ 를 맥에 두는 기간 (원문은 AI Archive Hub 로 간다)
-    # 프롬프트 층마다 넣는 최대 글자 수 (docs/CAT_MEMORY.md)
+    # 프롬프트 층마다 넣는 최대 글자 수 (pet/docs/CAT_MEMORY.md)
     "budget": {"facts": 1500, "recent": 1200, "prefetch": 900, "session": 4000, "recall": 1500},
     "share": "titles",               # Codex에 보내는 범위: labels | titles | full (아래 situation 참고)
     "gate": 0.5,                     # Clef "지금 말 걸 만한가" 확률이 이 이상이어야 말한다
@@ -426,7 +426,7 @@ class Codex:
                 pass
 
 
-# ───────────────────────── 기억 (docs/CAT_MEMORY.md) ─────────────────────────
+# ───────────────────────── 기억 (pet/docs/CAT_MEMORY.md) ─────────────────────────
 
 # 대화가 끝나면 한 번 부른다 (Mind.start_digest)
 DIGEST_SCHEMA = {
