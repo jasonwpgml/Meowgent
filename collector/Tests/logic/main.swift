@@ -372,5 +372,26 @@ do {
     check("손쉬운 사용 좌표로", L.axOrigin(CGRect(x: 10, y: 25, width: 100, height: 875), primaryHeight: 900) == CGPoint(x: 10, y: 0))
 }
 
+// 클립보드 기록: 종류 · 색 · 보관 정리 · 검색
+do {
+    typealias C = ClipRules
+    check("링크", C.classify("https://github.com/jasonwpgml") == .link && C.classify(" http://a.b/c?d=1 \n") == .link)
+    check("글 속 주소는 글", C.classify("여기 봐 https://a.com") == .text)
+    check("색: #RRGGBB·#RGB·rgb()", C.classify("#3a7bd5") == .color && C.classify("#FFF") == .color && C.classify("rgb(58, 123, 213)") == .color)
+    check("# 없는 6자리 색", C.classify("3A7BD5") == .color)
+    check("# 없는 3자리·숫자는 색 아님", C.classify("123") == .text && C.classify("fff") == .text)
+    check("rgb 범위 밖은 색 아님", C.color("rgb(300, 0, 0)") == nil)
+    if let c = C.color("#ff8000") { check("색 값", abs(c.r - 1) < 0.001 && abs(c.g - 128.0 / 255) < 0.001 && c.b == 0) } else { check("색 값", false) }
+    let day = 86400.0
+    let items: [C.Keep] = [.init(id: "new", ts: 100 * day, pinned: false), .init(id: "old", ts: 50 * day, pinned: false),
+                           .init(id: "oldPin", ts: 1 * day, pinned: true), .init(id: "mid", ts: 90 * day, pinned: false)]
+    check("기간 지난 것만 지움, 고정은 남김", C.expired(items, now: 100 * day, days: 30, maxCount: 10) == ["old"])
+    check("개수 넘으면 오래된 것부터", C.expired(items, now: 100 * day, days: 0, maxCount: 2) == ["old"])
+    check("기간 제한 없음", C.expired(items, now: 100 * day, days: 0, maxCount: 10).isEmpty)
+    check("검색: 낱말 모두", C.matches("회의 내일", in: ["내일 오후 회의 자료"]) && !C.matches("회의 모레", in: ["내일 오후 회의 자료"]))
+    check("검색: 이미지 글자·앱 이름", C.matches("영수증", in: ["", "카페 영수증 4,500원", "Preview"]) && C.matches("preview", in: ["", "", "Preview"]))
+    check("검색: 한글 자판으로 친 영문", C.matches("ㅎㅑ소ㅕㅠ", in: ["https://github.com"]))
+}
+
 print(failed == 0 ? "\n모두 통과" : "\n실패 \(failed)건")
 exit(failed == 0 ? 0 : 1)
