@@ -9,7 +9,7 @@
 
 | 조각 | 위치 | 언어 | 역할 | 없어도 되나 |
 |---|---|---|---|---|
-| 앱 (수집기 + 고양이) | `collector/` | Swift | 메뉴바 앱. 행동 기록, 프라이버시 필터, SQLite 저장, 고양이 오버레이, 에이전트 로그 감시, 한도 알림, 단축키 힌트 | 본체 |
+| 앱 (수집기 + 고양이) | `collector/` | Swift | 메뉴바 앱. 행동 기록, 프라이버시 필터, SQLite 저장, 고양이 오버레이, 에이전트 로그 감시, 한도 알림, 단축키 힌트, 런처(⌘⇧Space) | 본체 |
 | brain | `brain/` | Python (표준 라이브러리만) | 기록을 작업 구간으로 묶어 Clef에 판단을 묻고 `now.md`·타임라인을 쓴다 | 없으면 고양이가 "판단기는 꺼져 있다"고 말할 뿐 |
 | 말하는 고양이 | `brain/cat_mind.py` | Python (표준 라이브러리만) | 평소엔 규칙만 돌다가 일이 생기면 Clef에 말 걸지 묻고, 통과하면 고양이 전용 Codex 계정으로 말을 받아 온다 | 없으면 고양이가 말을 안 할 뿐 |
 | Clef 판단 서버 | `tools/install_clef.sh` | llama-server | 구간마다 활동·프로젝트·집중도 분류 (GPU 3초, 메모리 6.4GB 상주) | 없어도 됨. GPU 없는 기기엔 넣지 않는다 |
@@ -62,6 +62,7 @@ cd ../brain && ./install.sh       # (선택) brain 을 launchd 에 등록
 | `config.json` | 차단 앱·도메인 추가분, 텍스트 커밋 간격 등 |
 | `inbox/`, `inbox/done/` | 고양이 얼굴 옆 ! · ? 항목과 답 ([docs/INBOX.md](docs/INBOX.md)) |
 | `shortcuts.json`, `notices.jsonl`, `memos.jsonl`, `feedback.jsonl`, `reset_passes.json` | 단축키 힌트 기록, 고양이 알림·메모·피드백, 직접 적은 리셋권 |
+| `launcher.json`, `clipboard-history.json` | 런처의 자주 연 앱 순위(활동 기록 켠 동안만), 클립보드 기록(따로 켰을 때만, 0600) ([collector/README.md](collector/README.md#런처)) |
 | `actlog.log` | 앱 로그 (5MB 넘으면 교체) |
 
 말하는 고양이를 켜지 않았다면 외부 통신은 날씨 하나뿐이다. 고양이 햇살과 창밖 날씨를 위해 30분마다 Open-Meteo에 좌표(소수 한 자리)만 보낸다. `defaults write io.github.jasonwpgml.meowgent petWeather -bool false`로 끈다.

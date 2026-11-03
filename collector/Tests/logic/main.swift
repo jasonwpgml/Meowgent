@@ -338,5 +338,39 @@ do {
     check("메뉴바 앱은 많이 쓸 때만 물음", d(cand(regular: false)) == .keep && isAsk(d(cand(regular: false, mem: gb))) && isAsk(d(cand(regular: false, cpu: 40))))
 }
 
+// 런처: 검색 점수 · 한글 · 계산기 · 창 배치
+do {
+    typealias L = LauncherRules
+    func s(_ n: String, _ q: String) -> Double { L.score(n, q) ?? -1 }
+    check("이름 그대로가 가장 높음", s("Safari", "safari") > s("Safari Technology Preview", "safari"))
+    check("앞부분 > 단어 시작 > 포함", s("Notes", "no") > s("Sticky Notes", "no") && s("Sticky Notes", "no") > s("Piano", "no"))
+    check("글자 순서만 맞아도 찾음", s("Visual Studio Code", "vsc") > 0)
+    check("안 맞으면 nil", L.score("Mail", "xyz") == nil)
+    check("한글 자판으로 친 영문", L.qwerty("초개ㅡㄷ") == "chrome" && s("Google Chrome", "초개ㅡㄷ") > 0, L.qwerty("초개ㅡㄷ"))
+    check("겹받침·겹모음 자판", L.qwerty("읽") == "dlfr" && L.qwerty("와") == "dhk", L.qwerty("읽") + " " + L.qwerty("와"))
+    check("초성 검색", L.chosung("캘린더") == "ㅋㄹㄷ" && s("캘린더", "ㅋㄹ") > 0)
+    check("한글 이름 그대로", s("캘린더", "캘린") > s("캘린더", "ㅋㄹ"))
+    check("자주 연 앱 가산점", L.frecency(count: 10, lastUsed: 0, now: 0) > L.frecency(count: 1, lastUsed: 0, now: 0))
+    check("오래되면 줄어듦", L.frecency(count: 10, lastUsed: 0, now: 28 * 86400) < L.frecency(count: 10, lastUsed: 0, now: 0) / 3)
+    check("가산점 상한 20", L.frecency(count: 100_000, lastUsed: 0, now: 0) <= 20)
+
+    check("계산 사칙연산", L.calculate("12*(3+4)/2") == 42)
+    check("계산 우선순위·거듭제곱", L.calculate("2+3*4") == 14 && L.calculate("2^3^2") == 512)
+    check("계산 기호·쉼표", L.calculate("1,000 × 3 ÷ 2") == 1500)
+    check("계산 음수", L.calculate("-3+5") == 2 && L.calculate("2*-3") == -6)
+    check("숫자 하나는 식 아님", L.calculate("2026") == nil && L.calculate("-5") == nil)
+    check("글자 섞이면 식 아님", L.calculate("c++") == nil && L.calculate("3x4") == nil)
+    check("0 나누기·괄호 오류는 nil", L.calculate("1/0") == nil && L.calculate("(1+2") == nil)
+    check("결과 글", L.format(42) == "42" && L.format(0.1 + 0.2) == "0.3" && L.format(1.5) == "1.5", L.format(0.1 + 0.2))
+
+    let v = CGRect(x: 0, y: 25, width: 1440, height: 875)
+    check("왼쪽 반", L.frame(.left, visible: v, current: .zero) == CGRect(x: 0, y: 25, width: 720, height: 875))
+    check("오른쪽 반", L.frame(.right, visible: v, current: .zero) == CGRect(x: 720, y: 25, width: 720, height: 875))
+    check("위쪽 반은 y가 큰 쪽", L.frame(.top, visible: v, current: .zero).minY == 25 + 875 - 438)
+    check("가운데는 크기 유지", L.frame(.center, visible: v, current: CGSize(width: 800, height: 600)) == CGRect(x: 320, y: 163, width: 800, height: 600))
+    check("가운데는 화면보다 크면 줄임", L.frame(.center, visible: v, current: CGSize(width: 3000, height: 600)).width == 1440)
+    check("손쉬운 사용 좌표로", L.axOrigin(CGRect(x: 10, y: 25, width: 100, height: 875), primaryHeight: 900) == CGPoint(x: 10, y: 0))
+}
+
 print(failed == 0 ? "\n모두 통과" : "\n실패 \(failed)건")
 exit(failed == 0 ? 0 : 1)

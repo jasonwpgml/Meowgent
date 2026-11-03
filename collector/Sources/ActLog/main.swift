@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let resources = ResourceWatch()
     lazy var shortcuts = ShortcutCoach(dataDir: dataDir)
     lazy var mind = MindBridge(dataDir: dataDir)
+    lazy var launcher = Launcher(dataDir: dataDir)
     var statusItem: NSStatusItem!
     var resumeTimer: Timer?
     var permissionTimer: Timer?
@@ -108,6 +109,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         setupMenu()
         startPet()
+        launcher.canPersist = { [weak self] in self?.recordingEnabled == true }
+        launcher.notify = { [weak self] t in self?.pet?.notify(t, urgent: false) }
+        launcher.start()
         system.start()
         registerAgent()
 
@@ -180,6 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.quota.addMenuItems(to: m)
             self?.resources.addMenuItems(to: m)
             self?.shortcuts.addMenuItems(to: m)
+            self?.launcher.addMenuItems(to: m)
         }
         shortcuts.show = { [weak p] h in p?.keyHint(h.keys, h.title) ?? false }
         quota.notify = { [weak p] n in p?.notify(n.text, urgent: n.urgent, validUntil: n.validUntil) }
@@ -245,6 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(pet?.isHidden == false ? "고양이 숨기기" : "고양이 보이기", #selector(togglePet), target: self)
         if pet != nil { mind.addMenuItems(to: menu, withQuota: true) }
         resources.addMenuItems(to: menu)
+        launcher.addMenuItems(to: menu)
         if pet?.hasToys == true { menu.addItem("🧺 고양이 장난감 치우기", #selector(putToysAway), target: self) }
         menu.addItem("데이터 폴더 열기", #selector(openData), target: self)
         menu.addItem("설정 파일(config.json) 열기", #selector(openConfig), target: self)
@@ -261,7 +267,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Context.shared.update { $0.paused = true }
         store.write(Event("lifecycle", payload: ["event": "pause", "minutes": minutes ?? -1]), force: true)
         resumeTimer?.invalidate()
-        if minutes == nil { UserDefaults.standard.set(false, forKey: "recordingEnabled") }
+        if minutes == nil {
+            UserDefaults.standard.set(false, forKey: "recordingEnabled")
+            launcher.recordingOff()
+        }
         resources.cleaner.recordingChanged()
         if let minutes {
             resumeTimer = Timer.scheduledTimer(withTimeInterval: minutes * 60, repeats: false) { [weak self] _ in self?.resume() }
