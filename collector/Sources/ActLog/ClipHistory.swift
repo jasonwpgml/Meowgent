@@ -3,7 +3,7 @@ import Carbon
 
 /// 런처에서 꺼내 쓰는 클립보드 기록. 활동 기록과 따로 켜는 기능이고 기본은 꺼짐.
 /// 복사한 글만 최근 `limit`개를 이 맥의 clipboard-history.json(0600)에 둔다. 끄면 그 자리에서 지운다.
-/// 남기지 않는 것: 비밀번호 관리자 표시가 붙은 복사, 보안 입력 중, 막은 앱·사이트·시크릿 창에서 한 복사,
+/// 남기지 않는 것: 비밀번호 관리자 표시가 붙은 복사, 보안 입력 중, 막은 앱·사이트·시크릿 창·주소를 확인 못 한 브라우저에서 한 복사,
 /// 키·토큰·카드번호·주민번호처럼 보이는 글 (가려서 남기면 다시 붙여넣을 때 쓸모가 없으니 아예 뺀다).
 final class ClipHistory {
     struct Entry: Codable, Equatable {
@@ -63,8 +63,8 @@ final class ClipHistory {
         let types = pb.types?.map(\.rawValue) ?? []
         guard !SystemWatcher.isConcealed(types), !IsSecureEventInputEnabled() else { return }
         let front = NSWorkspace.shared.frontmostApplication
-        let s = Context.shared.snapshot
-        guard !Privacy.isBlocked(bundle: front?.bundleIdentifier), !s.appBlocked, !s.urlBlocked, !s.incognito else { return }
+        // 수집기와 같은 기준: 브라우저 주소를 아직(또는 영영) 못 읽은 동안도 막힌 것으로 본다 (fail-closed, Safari 기본 포함)
+        guard !Privacy.isBlocked(bundle: front?.bundleIdentifier), !Context.shared.snapshot.blocked else { return }
         guard let text = pb.string(forType: .string), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               text.count <= Self.maxChars, !Privacy.redact(text).1 else { return }
         entries.removeAll { $0.text == text }

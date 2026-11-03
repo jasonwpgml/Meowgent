@@ -363,7 +363,7 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         a.messageText = "클립보드 기록을 남길까요?"
         a.informativeText = """
         복사한 글을 최근 \(ClipHistory.limit)개까지 이 맥에만 저장하고(~/Library/Application Support/Meowgent/clipboard-history.json), \(Self.clipKeyName) 나 런처의 Tab 으로 다시 붙여넣습니다. 외부로 보내는 것은 없습니다.
-        비밀번호 관리자에서 복사한 것, 막은 앱·사이트·시크릿 창에서 복사한 것, 키·토큰·카드번호처럼 보이는 글은 남기지 않습니다. 끄면 기록을 바로 지웁니다.
+        비밀번호 관리자에서 복사한 것, 막은 앱·사이트·시크릿 창·주소를 확인 못 한 브라우저(Safari 기본 포함)에서 복사한 것, 키·토큰·카드번호처럼 보이는 글은 남기지 않습니다. 끄면 기록을 바로 지웁니다.
         """
         a.addButton(withTitle: "켜기")
         a.addButton(withTitle: "취소")
