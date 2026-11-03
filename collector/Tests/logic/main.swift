@@ -393,5 +393,49 @@ do {
     check("검색: 한글 자판으로 친 영문", C.matches("ㅎㅑ소ㅕㅠ", in: ["https://github.com"]))
 }
 
+// 대시보드: 질문 묶기 · 알림 접기
+do {
+    let now = 1_000_000.0
+    let proj: [[String: String]] = [["id": "a", "label": "A 프로젝트"], ["id": "b", "label": "B"]]
+    func ask(_ f: String, _ src: String = "brain", choices: [[String: String]]? = nil, created: Double = now, level: String = "yellow") -> InboxRules.Item? {
+        InboxRules.parse(["kind": "ask", "text": "질문 \(f)", "source": src, "choices": choices ?? proj, "created": created, "level": level], file: f + ".json", now: now)
+    }
+    let a1 = ask("e1", created: now - 30)!, a2 = ask("e2", created: now - 20)!, a3 = ask("e3", created: now - 10)!
+    let perm = ask("perm", "고양이", choices: [["id": "y", "label": "허락"], ["id": "n", "label": "안 돼"]])!
+    let todo = InboxRules.parse(["text": "마감", "due": now + 3600], file: "t.json", now: now)!
+    let groups = InboxRules.group([a3, perm, a1, todo, a2])
+    check("같은 곳·같은 선택지는 한 묶음", groups.contains { $0.isBatch && $0.items.map(\.id) == ["e1", "e2", "e3"] })
+    check("다른 선택지·확인할 일은 따로", groups.count == 3 && groups.filter(\.isBatch).count == 1)
+    check("마감 하루 안이면 빨강이 맨 앞", groups.first?.items.first?.id == "t" && todo.red)
+    check("파일 이름이 id 기본값", a1.id == "e1" && a1.file == "e1.json")
+    check("선택지 글자만 줘도 됨", InboxRules.parse(["kind": "ask", "text": "x", "choices": ["예", "아니오"]], file: "x.json", now: now)?.choices.map(\.id) == ["예", "아니오"])
+    check("만료된 건 안 보임", InboxRules.parse(["text": "x", "expires": now - 1], file: "x.json", now: now) == nil)
+    check("javascript 주소는 버림", InboxRules.parse(["text": "x", "url": "javascript:alert(1)"], file: "x.json", now: now)?.url == nil)
+
+    let log = """
+    {"text":"🧠 메모리 빠듯\\n큰 앱: A 3GB","ts":100,"urgent":false}
+    {"text":"🧠 메모리 빠듯\\n큰 앱: B 4GB","ts":200,"urgent":false}
+    {"text":"저녁 먹어라","ts":300,"urgent":false}
+    {"text":"🧠 메모리 빠듯\\n큰 앱: C 5GB","ts":400,"urgent":false}
+    깨진 줄
+    {"text":"컨텍스트 85%","ts":500,"urgent":true}
+    """
+    let ns = NoticeRules.parse(log)
+    check("알림 읽기 (깨진 줄 건너뜀)", ns.count == 5 && ns.filter(\.urgent).count == 1)
+    let rows = NoticeRules.collapse(ns.filter { !$0.urgent })
+    check("연달아 같은 알림만 접음", rows.map(\.count) == [1, 1, 2] && rows.first?.ts == 400, "\(rows.map(\.count))")
+    check("접으면 가장 최근 글", rows.last?.text.hasSuffix("B 4GB") == true)
+    let ctx = NoticeRules.collapse(NoticeRules.parse("""
+    {"text":"Claude ‘x’ 컨텍스트 80%다","ts":1,"urgent":true}
+    {"text":"Claude ‘x’ 컨텍스트 85%다","ts":2,"urgent":true}
+    {"text":"Codex ‘y’ 컨텍스트 85%다","ts":3,"urgent":true}
+    """))
+    let chatSet = NoticeRules.catLines("{\"role\":\"cat\",\"text\":\"날씨 도구는 이렇다냥 \"}\n{\"role\":\"user\",\"text\":\"컨텍스트 85%다\"}")
+    check("대화 답은 경고 아님", !NoticeRules.isWarning(.init(text: "날씨 도구는 이렇다냥", ts: 1, urgent: true), chat: chatSet)
+          && NoticeRules.isWarning(.init(text: "컨텍스트 85%다", ts: 1, urgent: true), chat: chatSet)
+          && !NoticeRules.isWarning(.init(text: "저녁", ts: 1, urgent: false), chat: chatSet))
+    check("숫자만 다른 첫 줄은 접음, 세션이 다르면 따로", ctx.map(\.count) == [1, 2] && ctx.last?.text.contains("85%") == true, "\(ctx.map(\.count))")
+}
+
 print(failed == 0 ? "\n모두 통과" : "\n실패 \(failed)건")
 exit(failed == 0 ? 0 : 1)

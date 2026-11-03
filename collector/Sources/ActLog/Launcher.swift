@@ -11,6 +11,7 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     struct Item {
         enum Action {
             case app(URL), calc(String), layout(LauncherRules.Layout), clip(ClipHistory.Entry), open(URL), web(String), enableClips
+            case command(Int)
         }
         let title: String
         let subtitle: String
@@ -26,6 +27,8 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     var canPersist: () -> Bool = { false }
     /// 창을 닫은 뒤 알려 줄 말 (고양이 말풍선)
     var notify: ((String) -> Void)?
+    /// 묘전트 자체 명령 (대시보드 열기 등): 이름 · 찾을 말 · SF Symbol · 할 일
+    var commands: [(title: String, keywords: [String], symbol: String, run: () -> Void)] = []
 
     private let apps = AppIndex()
     private let usageURL: URL
@@ -176,6 +179,10 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             guard let s = [LauncherRules.score(a.name, q), LauncherRules.score(a.file, q)].compactMap({ $0 }).max() else { return nil }
             let u = usage[a.url.path]
             return (appItem(a), s + LauncherRules.frecency(count: u?.n ?? 0, lastUsed: u?.t ?? 0, now: now))
+        }
+        for (n, c) in commands.enumerated() {
+            guard let s = (c.keywords + [c.title]).compactMap({ LauncherRules.score($0, q) }).max(), s >= 60 else { continue }
+            scored.append((Item(title: c.title, subtitle: "Meowgent", icon: symbol(c.symbol), tag: "명령", action: .command(n)), s + 5))
         }
         if previous != nil {
             for l in LauncherRules.Layout.allCases {
@@ -330,6 +337,9 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             var c = URLComponents(string: "https://www.google.com/search")!
             c.queryItems = [URLQueryItem(name: "q", value: q)]
             if let u = c.url { NSWorkspace.shared.open(u) }
+        case .command(let n):
+            close(reactivate: false)
+            if commands.indices.contains(n) { commands[n].run() }
         case .enableClips:
             if confirmClips() { clips.setEnabled(true) }
             show(.clipboard)
