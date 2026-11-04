@@ -21,6 +21,7 @@ enum InboxRules {
         let due: Double?
         let url: URL?
         let choices: [Choice]
+        var multi = false           // 여러 개 골라도 되는 질문 (체크 상자로 고르고 answer 에 "A, B")
     }
 
     /// 같은 곳에서 같은 선택지로 물은 질문들 (2개 이상이면 한 번에 답할 수 있다)
@@ -51,7 +52,8 @@ enum InboxRules {
         let stem = (file as NSString).deletingPathExtension
         return Item(id: o["id"] as? String ?? stem, file: file, ask: kind == "ask", red: red, text: text,
                     detail: (o["detail"] as? String).flatMap { $0.isEmpty ? nil : $0 }, source: o["source"] as? String ?? "",
-                    created: o["created"] as? Double ?? now, due: due, url: url, choices: choices)
+                    created: o["created"] as? Double ?? now, due: due, url: url, choices: choices,
+                    multi: kind == "ask" && o["multi"] as? Bool == true && choices.count > 1)
     }
 
     /// 빨강 먼저, 그 안에서 마감 가까운 것 → 오래된 것
@@ -61,13 +63,13 @@ enum InboxRules {
         return a.created < b.created
     }
 
-    /// 질문(?)은 보낸 곳 + 선택지 id 목록이 같으면 한 묶음. 확인할 일(!)과 선택지 없는 질문은 하나씩.
+    /// 질문(?)은 보낸 곳 + 선택지 id 목록이 같으면 한 묶음. 확인할 일(!)과 선택지 없는 질문, 여러 개 고르는 질문은 하나씩.
     /// 묶음 순서는 그 안에서 가장 앞에 올 항목 기준
     static func group(_ items: [Item]) -> [Group] {
         var keyed: [String: [Item]] = [:]
         var keys: [String] = []
         for i in items.sorted(by: InboxRules.order) {
-            let key = i.ask && !i.choices.isEmpty ? "ask|\(i.source)|" + i.choices.map(\.id).joined(separator: "\u{1F}") : "one|\(i.file)"
+            let key = i.ask && !i.choices.isEmpty && !i.multi ? "ask|\(i.source)|" + i.choices.map(\.id).joined(separator: "\u{1F}") : "one|\(i.file)"
             if keyed[key] == nil { keys.append(key) }
             keyed[key, default: []].append(i)
         }
@@ -253,5 +255,50 @@ enum ThinkRules {
                               why: s["why"] as? String ?? "", status: s["status"] as? String ?? "new")
         }
         return Improve(ts: ts, summary: o["summary"] as? String ?? "", suggestions: list)
+    }
+}
+
+/// 고양이가 맡긴 코딩 작업 (mind/tasks/<id>/task.json, brain/code_tasks.py 가 쓴다)
+enum TaskRules {
+    struct Task: Equatable {
+        let id: String
+        let agent: String       // 보이는 이름 (Claude Code 등)
+        let repo: String
+        let task: String
+        let state: String       // running · done · failed · timeout · cancelled · merged · discarded
+        let started: Double
+        let ended: Double?
+        let summary: String?
+        let error: String?
+        let files: Int
+        let stat: String
+        let branch: String
+        let worktree: String
+    }
+
+    static let stateKo = ["running": "하는 중", "done": "끝남", "failed": "실패", "timeout": "시간 초과", "cancelled": "멈춤",
+                          "merged": "합침", "discarded": "버림"]
+
+    static func parse(_ o: [String: Any]) -> Task? {
+        guard let id = o["id"] as? String, let state = o["state"] as? String else { return nil }
+        return Task(id: id, agent: o["agent_name"] as? String ?? o["agent"] as? String ?? "?", repo: o["repo"] as? String ?? "",
+                    task: o["task"] as? String ?? "", state: state, started: o["started"] as? Double ?? 0, ended: o["ended"] as? Double,
+                    summary: (o["summary"] as? String).flatMap { $0.isEmpty ? nil : $0 }, error: (o["error"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                    files: o["files"] as? Int ?? 0, stat: o["stat"] as? String ?? "", branch: o["branch"] as? String ?? "",
+                    worktree: o["worktree"] as? String ?? "")
+    }
+
+    /// 하는 중 먼저, 그다음 최근 것부터
+    static func order(_ a: Task, _ b: Task) -> Bool {
+        if (a.state == "running") != (b.state == "running") { return a.state == "running" }
+        return a.started > b.started
+    }
+
+    /// "Claude Code · Meowgent · 하는 중 12분" / "… · 끝남 · 파일 3개"
+    static func subtitle(_ t: Task, now: Double) -> String {
+        let mins = Int(((t.ended ?? now) - t.started) / 60)
+        var parts = [t.agent, t.repo, (stateKo[t.state] ?? t.state) + (t.state == "running" ? " \(mins)분째" : " · \(mins)분 걸림")]
+        if t.state != "running" { parts.append(t.files > 0 ? "파일 \(t.files)개" : "바뀐 파일 없음") }
+        return parts.joined(separator: " · ")
     }
 }

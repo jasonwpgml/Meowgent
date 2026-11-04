@@ -9,10 +9,10 @@ import AppKit
 /// 색은 급한 것(빨강)과 안 읽은 경고(시스템 강조색 점)에만 쓰고 나머지는 회색 음영으로 나눈다.
 final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearchFieldDelegate, NSToolbarDelegate {
     enum Tab: Int, CaseIterable {
-        case inbox, warnings, notices, thinking, improve
+        case inbox, warnings, notices, thinking, tasks, improve
 
-        var title: String { ["질문", "경고", "알림", "생각", "개선"][rawValue] }
-        var symbol: String { ["questionmark.bubble", "exclamationmark.triangle", "bell", "brain", "wrench.and.screwdriver"][rawValue] }
+        var title: String { ["질문", "경고", "알림", "생각", "작업", "개선"][rawValue] }
+        var symbol: String { ["questionmark.bubble", "exclamationmark.triangle", "bell", "brain", "hammer", "wrench.and.screwdriver"][rawValue] }
     }
 
     private let inbox: URL
@@ -37,6 +37,8 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
     private var chat: Set<String> = []
     private var decisions: [ThinkRules.Decision] = []
     private var improve: ThinkRules.Improve?
+    private var tasks: [TaskRules.Task] = []
+    private var picks: [String: [String]] = [:]     // 여러 개 고르는 질문에서 체크한 보기 id (고른 순서)
     private var unchecked: Set<String> = []        // 묶음에서 체크를 푼 항목
     private var expanded: Set<String> = []         // 펼친 설명·알림
     private var writing: String?                   // "직접 적기" 칸을 연 항목
@@ -74,11 +76,15 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
         menu.addItem("📋 대시보드\(counts.isEmpty ? "" : " (\(counts))")", #selector(show), target: self)
     }
 
-    @objc func show() {
+    @objc func show() { showTab(nil) }
+
+    /// tab 을 주면 그 탭으로 (고양이에게 "작업 보여 줘" 같은 말로 열 때)
+    func showTab(_ want: Tab?) {
         DispatchQueue.main.async { [self] in
             if window == nil { build() }
             // 답할 질문이 없고 새 경고가 있으면 경고 탭부터
-            if window?.isVisible != true {
+            if let want { tab = want }
+            else if window?.isVisible != true {
                 tab = loadInbox().isEmpty && newWarnings(loadNotices(), loadChat()) > 0 ? .warnings : .inbox
             }
             reload(force: true)
@@ -145,13 +151,18 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
         chat = loadChat()
         decisions = ThinkRules.parse(Self.tail(mindDir.appendingPathComponent("decisions.jsonl")))
         improve = (try? Data(contentsOf: mindDir.appendingPathComponent("improve/latest.json"))).flatMap(ThinkRules.parseImprove)
+        tasks = loadTasks()
         unchecked.formIntersection(Set(items.map(\.id)))
+        picks = picks.filter { k, _ in items.contains { $0.id == k } }
         if let w = writing, !items.contains(where: { $0.id == w }) { writing = nil }
         sideRows[Tab.inbox.rawValue].count = items.count
         sideRows[Tab.warnings.rawValue].count = tab == .warnings ? 0 : newWarnings(notices, chat)
         sideRows[Tab.improve.rawValue].count = improve?.suggestions.filter { $0.status == "new" }.count ?? 0
+        sideRows[Tab.tasks.rawValue].count = tasks.filter { $0.state == "running" }.count
         for (n, r) in sideRows.enumerated() { r.selected = n == tab.rawValue }
-        let stamp = "\(tab.rawValue)|" + items.map(\.file).joined(separator: ",") + "|\(notices.last?.ts ?? 0)|\(decisions.last?.ts ?? 0)|\(improve?.ts ?? 0)|\(improveOn)"
+        // 하는 중인 작업은 분이 바뀔 때마다 다시 그린다
+        let taskStamp = tasks.map { "\($0.id):\($0.state)" }.joined(separator: ",") + (tab == .tasks && tasks.contains { $0.state == "running" } ? "|\(Int(Date().timeIntervalSince1970 / 60))" : "")
+        let stamp = "\(tab.rawValue)|" + items.map(\.file).joined(separator: ",") + "|\(notices.last?.ts ?? 0)|\(decisions.last?.ts ?? 0)|\(improve?.ts ?? 0)|\(improveOn)|" + taskStamp
         guard force || stamp != shownStamp else { return }
         shownStamp = stamp
         render()
@@ -160,8 +171,17 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
 
     // MARK: 답하기
 
-    /// answer: 고른 선택지 id 또는 직접 적은 글, 확인은 "done", 건너뛰기는 nil
-    private func resolve(_ list: [InboxRules.Item], _ answer: String?, label: String) {
+    private func loadTasks() -> [TaskRules.Task] {
+        let dir = mindDir.appendingPathComponent("tasks", isDirectory: true)
+        let subs = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        return subs.compactMap { d in
+            (try? Data(contentsOf: d.appendingPathComponent("task.json")))
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }.flatMap(TaskRules.parse)
+        }.sorted(by: TaskRules.order)
+    }
+
+    /// answer: 고른 선택지 id 또는 직접 적은 글, 확인은 "done", 건너뛰기는 nil. answers: 여러 개 고른 질문의 id 목록
+    private func resolve(_ list: [InboxRules.Item], _ answer: String?, label: String, answers: [String]? = nil) {
         guard !list.isEmpty else { return }
         let fm = FileManager.default
         let done = inbox.appendingPathComponent("done", isDirectory: true)
@@ -171,6 +191,7 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
             let src = inbox.appendingPathComponent(it.file), dest = done.appendingPathComponent(it.file)
             guard let d = try? Data(contentsOf: src), var o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
             o["answer"] = answer ?? NSNull()
+            if let answers { o["answers"] = answers }
             o["resolved"] = Date().timeIntervalSince1970
             guard Self.write(o, to: dest) else { continue }
             try? fm.removeItem(at: src)
@@ -189,6 +210,7 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
         for (src, dest) in lastMoved {
             guard let d = try? Data(contentsOf: dest), var o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
             o["answer"] = nil
+            o["answers"] = nil
             o["resolved"] = nil
             if Self.write(o, to: src) { try? fm.removeItem(at: dest) }
         }
@@ -242,7 +264,7 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
             switch e.keyCode {
             case 6: undo(); return true
             case 3: if let search { window?.makeFirstResponder(search) }; return true
-            case 18, 19, 20, 21, 23: select(Tab(rawValue: digits[e.keyCode]!)!); return true
+            case 18, 19, 20, 21, 23, 22: select(Tab(rawValue: digits[e.keyCode]!)!); return true
             default: return false
             }
         }
@@ -460,6 +482,8 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
             noticeList(notices.filter { !NoticeRules.isWarning($0, chat: chat) }, unseenAfter: nil, empty: "알림 없음")
         case .thinking:
             thinkingList()
+        case .tasks:
+            taskList()
         case .improve:
             improveView()
         }
@@ -493,15 +517,45 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
     // MARK: 질문
 
     private func askSection(_ it: InboxRules.Item, focused: Bool) {
-        header(Self.meta(it.source, Self.ago(it.created), it.due.map { "마감 " + Self.ago($0) }), red: it.red, top: stack.arrangedSubviews.isEmpty)
+        header(Self.meta(it.source, Self.ago(it.created), it.due.map { "마감 " + Self.ago($0) }, it.multi ? "여러 개 골라도 됨" : nil),
+               red: it.red, top: stack.arrangedSubviews.isEmpty)
         var rows: [NSView] = [textBlock(it.text, detail: it.detail, key: it.id)]
-        if !it.choices.isEmpty { rows.append(choiceButtons(it.choices, target: it.id, numbered: focused)) }
+        if it.multi { rows.append(contentsOf: pickRows(it)) }
+        else if !it.choices.isEmpty { rows.append(choiceButtons(it.choices, target: it.id, numbered: focused)) }
         rows.append(writing == it.id ? writeField() : actions([
             button("직접 적기…") { [weak self] in self?.writing = it.id; self?.render() },
             button("건너뛰기") { [weak self] in self?.resolve([it], nil, label: "건너뜀") },
         ]))
-        if focused { focusKey = it.id; focusChoices = it.choices }
+        if focused && !it.multi { focusKey = it.id; focusChoices = it.choices }
         add(group([rows], focused: focused))
+    }
+
+    /// 여러 개 고르는 질문: 보기마다 체크 상자 + "n개 고르기" (answer 는 "A, B", answers 는 id 목록)
+    private func pickRows(_ it: InboxRules.Item) -> [NSView] {
+        let chosen = picks[it.id] ?? []
+        let flow = FlowView()
+        flow.setViews(it.choices.map { c in
+            let b = ActionButton(title: c.label) { [weak self] in
+                guard let self else { return }
+                var l = self.picks[it.id] ?? []
+                if let i = l.firstIndex(of: c.id) { l.remove(at: i) } else { l.append(c.id) }
+                self.picks[it.id] = l
+                self.render()
+            }
+            b.setButtonType(.switch)
+            b.state = chosen.contains(c.id) ? .on : .off
+            b.toolTip = c.label
+            return b
+        })
+        let labels = chosen.compactMap { id in it.choices.first { $0.id == id }?.label }
+        let go = button(chosen.isEmpty ? "고르기" : "\(chosen.count)개 고르기") { [weak self] in
+            guard let self, !chosen.isEmpty else { return }
+            self.picks[it.id] = nil
+            self.resolve([it], labels.joined(separator: ", "), label: labels.joined(separator: ", "), answers: chosen)
+        }
+        go.isEnabled = !chosen.isEmpty
+        go.keyEquivalent = chosen.isEmpty ? "" : "\r"
+        return [flow, actions([go])]
     }
 
     private func todoSection(_ it: InboxRules.Item, focused: Bool) {
@@ -693,6 +747,47 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
             rows.append(decisionRow(d))
         }
         flush()
+    }
+
+    // MARK: 작업 (고양이가 맡긴 코딩)
+
+    private func taskList() {
+        let q = query
+        let list = tasks.filter { q.isEmpty || ($0.task + " " + $0.repo + " " + $0.agent).lowercased().contains(q) }
+        let running = list.filter { $0.state == "running" }.count
+        window?.subtitle = list.isEmpty ? "" : "\(list.count)개\(running > 0 ? " · 하는 중 \(running)" : "")"
+        guard !list.isEmpty else {
+            add(emptyState("hammer", q.isEmpty ? "맡긴 작업 없음 · 대화창에서 \"…고쳐 줘\"라고 시키면 묻고 맡긴다냥" : "찾는 작업 없음"))
+            return
+        }
+        let now = Date().timeIntervalSince1970
+        for (n, t) in list.enumerated() {
+            if n == 0 || (list[n - 1].state == "running") != (t.state == "running") {
+                header(t.state == "running" ? "하는 중" : "끝난 것", top: stack.arrangedSubviews.isEmpty)
+            }
+            var rows: [NSView] = [textBlock(t.task, detail: TaskRules.subtitle(t, now: now), key: "task-" + t.id)]
+            if let sm = t.summary ?? t.error { rows.append(expandable(sm, key: "task-s" + t.id, lines: 3, size: 12)) }
+            var buttons: [NSView] = []
+            let wt = URL(fileURLWithPath: t.worktree)
+            let folder = mindDir.appendingPathComponent("tasks/\(t.id)", isDirectory: true)
+            if FileManager.default.fileExists(atPath: wt.path) { buttons.append(button("폴더 열기") { NSWorkspace.shared.open(wt) }) }
+            buttons.append(button("기록 보기") { NSWorkspace.shared.open(folder) })
+            if t.state == "running" {
+                buttons.append(button("멈추기") { [weak self] in
+                    FileManager.default.createFile(atPath: folder.appendingPathComponent("cancel").path, contents: nil)
+                    self?.showStatus("멈추라고 했다냥 (5초 안에 멈춘다)")
+                })
+            } else if t.state == "done" || t.state == "failed", t.files > 0, items.contains(where: { $0.text.contains("합칠까냥") && $0.ask }) {
+                buttons.append(button("합칠지 고르기") { [weak self] in self?.select(.inbox) })
+            }
+            let branch = NSTextField(labelWithString: t.branch)
+            branch.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+            branch.textColor = .tertiaryLabelColor
+            branch.lineBreakMode = .byTruncatingMiddle
+            branch.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            rows.append(actions(buttons, leading: branch))
+            add(group([rows], focused: t.state == "running"))
+        }
     }
 
     private func decisionRow(_ d: ThinkRules.Decision) -> NSView {

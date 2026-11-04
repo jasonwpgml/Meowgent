@@ -28,6 +28,9 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # -I 로 떠도 옆의 code_tasks.py 를 읽게
+import code_tasks  # noqa: E402
+
 DATA = Path.home() / "Library/Application Support/Meowgent"
 MIND = DATA / "mind"
 LOG = MIND / "mind.log"
@@ -66,6 +69,11 @@ DEFAULT_CONFIG = {
     "quiet_s": 10800,                # 이만큼 아무 말 없었으면 궁금한 걸 하나 묻는다
     "present_idle_s": 120,           # 먼저 말 걸 땐 이 안에 키보드·마우스 입력이 있어야 한다 (잠자기·DarkWake 에 말 걸지 않게)
     "improve_every_s": 7 * 86400,    # 개선 제안 주기 (mind/improve.on 이 있을 때만)
+    # 시키면 하기 (docs/CAT_MIND.md). 코딩 작업은 늘 먼저 묻고, 아래 저장소에서만 worktree 를 만들어 한다
+    "code_repos": {},                # {이름: 경로}. 비면 install.sh 가 남긴 Meowgent 저장소 하나
+    "code_agents": ["claude", "codex", "cursor", "grok"],   # 물을 때 보기 순서 (설치된 것만). 우선순위는 나중에 정한다
+    "code_max_running": 2,
+    "code_timeout_s": 3600,
 }
 
 # 신호: (우선순위, Clef에 보여 줄 설명). 숫자가 작을수록 먼저
@@ -117,13 +125,27 @@ def run_tools(allow, granted):
     return sorted(on)
 ALLOW_ONCE, ALLOW_ALWAYS, DENY = "이번만 허락", "항상 허락", "안 돼"
 
+# 대화로 시키는 일 (actions). 실행은 앱(MindBridge)의 고정 코드가 맡고, code 만 여기서 worktree 로 돌린다
+ACTIONS = {
+    "open_app": "앱 열기 (arg=앱 이름)",
+    "open_url": "웹 주소 열기 (arg=https 주소)",
+    "command": "Meowgent 기능 실행 (arg=아래 명령 id)",
+    "timer": "타이머 (arg=분, detail=시간 되면 할 말)",
+    "todo": "할 일 남기기 → 얼굴 옆 ! 와 대시보드 (arg=할 일, detail=설명)",
+    "code": "코딩 작업 맡기기 (arg=저장소 이름, detail=에이전트에게 줄 구체적 지시, agent=추천 도구). 늘 먼저 묻는다",
+}
+APP_ACTIONS = {"open_app", "open_url", "command", "timer", "todo"}
+CODE_NO = "안 돼"
+MERGE, KEEP, DISCARD = "합치기", "그대로 두기", "버리기"
+
 SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["say", "ask", "choices", "remember", "note", "need"],
+    "required": ["say", "ask", "choices", "multi", "remember", "note", "need", "actions"],
     "properties": {
         "say": {"type": "string", "description": "고양이가 할 말 (규칙의 길이를 따른다)"},
         "ask": {"type": ["string", "null"], "description": "사용자에게 답을 받고 싶은 질문 하나. 없으면 null"},
-        "choices": {"type": "array", "items": {"type": "string"}, "description": "ask 의 짧은 보기 0~4개"},
+        "choices": {"type": "array", "items": {"type": "string"}, "description": "ask 의 짧은 보기 0~6개"},
+        "multi": {"type": "boolean", "description": "choices 중 여러 개를 골라도 되면 true (복수 선택·투표). 하나만 고르면 false"},
         "remember": {"type": ["string", "null"], "description": "사용자가 기억해 달라고 한 사실 한 줄. 없으면 null"},
         "note": {"type": ["string", "null"], "description": "이번 대화에서 지금까지 오간 요점 (다음 답이 이어받는다). 300자 이내"},
         "need": {"anyOf": [{"type": "null"}, {
@@ -131,6 +153,12 @@ SCHEMA = {
             "properties": {"tool": {"type": "string", "enum": list(TOOLS)}, "why": {"type": "string"},
                            "query": {"type": "string", "description": "memory 면 찾을 말, 아니면 빈 문자열"}}}],
             "description": "제대로 답하려면 필요한 것 (사용자가 허락하면 다시 답한다). 지금 가진 것으로 충분하면 null"},
+        "actions": {"type": "array", "description": "사용자가 시킨 일 0~3개. 시키지 않았으면 빈 배열", "items": {
+            "type": "object", "additionalProperties": False, "required": ["tool", "arg", "detail", "agent"],
+            "properties": {"tool": {"type": "string", "enum": list(ACTIONS)}, "arg": {"type": "string"},
+                           "detail": {"type": "string", "description": "없으면 빈 문자열"},
+                           "agent": {"type": "string", "enum": ["auto", *code_tasks.AGENTS],
+                                     "description": "code 일 때 추천 도구, 그 밖엔 auto"}}}},
     },
 }
 
@@ -726,6 +754,14 @@ class Mind:
         (self.dir / "thinking").unlink(missing_ok=True)   # 지난 실행이 남긴 것
         self.next_prune = 0
         self.mem = Memory(self.dir, now)
+        if not self.cfg["code_repos"]:   # install.sh 가 남긴 이 저장소 경로 (개발 중엔 이 파일의 저장소)
+            here = Path(__file__).resolve()
+            mark = here.with_name("repo_path")
+            repo = Path(mark.read_text().strip()) if mark.exists() else here.parent.parent
+            if (repo / ".git").exists():
+                self.cfg["code_repos"] = {repo.name: str(repo)}
+        self.tasks = code_tasks.Tasks(self.dir, self.cfg, now, log)
+        self.last_tasks = 0
         self.refresh_quota()
 
     # 저장
@@ -767,12 +803,25 @@ class Mind:
         self.st["last_cat"] = ts
         self.journal("cat", text, kind=kind)
 
-    def post_ask(self, question, choices, kind="", ttl=86400, **extra):
-        """inbox/mind-[kind-]<ts>.json: 얼굴 옆 ? 와 대화창 버튼. kind 가 있으면 고양이 질문 수 제한에 안 센다"""
+    def post_ask(self, question, choices, kind="", ttl=86400, multi=False, **extra):
+        """inbox/mind-[kind-]<ts>.json: 얼굴 옆 ? 와 대화창 버튼. kind 가 있으면 고양이 질문 수 제한에 안 센다.
+        multi: 여러 개 골라도 되는 질문 (앱은 체크 상자로 보이고 answer 에 "A, B", answers 에 목록을 붙인다)"""
         ts = self.now()
-        name = f"mind-{kind + '-' if kind else ''}{int(ts)}"
+        name = f"mind-{kind + '-' if kind else ''}{int(ts * 1000)}"
         item = {"id": name, "kind": "ask", "level": "yellow", "source": "고양이", "text": question,
-                "choices": [{"id": c, "label": c} for c in choices[:4]], "created": ts, "expires": ts + ttl, **extra}
+                "choices": [{"id": c, "label": c} for c in choices[:6]], "created": ts, "expires": ts + ttl, **extra}
+        if multi:
+            item["multi"] = True
+        write_private(self.data / "inbox" / f"{name}.json", json.dumps(item, ensure_ascii=False, indent=2))
+        return name
+
+    def post_todo(self, text, detail="", level="yellow", source="고양이"):
+        """얼굴 옆 ! 와 대시보드 질문 탭의 확인할 일"""
+        ts = self.now()
+        name = f"mind-todo-{int(ts * 1000)}"
+        item = {"id": name, "kind": "todo", "level": level, "source": source, "text": clip(text, 120), "created": ts}
+        if detail:
+            item["detail"] = clip(detail, 600)
         write_private(self.data / "inbox" / f"{name}.json", json.dumps(item, ensure_ascii=False, indent=2))
 
     def post_perm(self, tool, why, request, granted, query=None):
@@ -785,7 +834,7 @@ class Mind:
 
     def open_asks(self):
         inbox = self.data / "inbox"
-        return sum(not re.match(r"mind-(perm|rule)-", f.name) for f in inbox.glob("mind-*.json")) if inbox.exists() else 0
+        return sum(not re.match(r"mind-(perm|rule|chat|code|todo)-", f.name) for f in inbox.glob("mind-*.json")) if inbox.exists() else 0
 
     def allow_always(self, tool):
         self.cfg["allow"] = sorted(set(self.cfg["allow"]) | {tool})
@@ -819,7 +868,127 @@ class Mind:
                 if ans == KEEP_RULE:
                     self.mem.add_rule(str(o["rule"]))
                 continue
+            if o.get("todo"):   # 확인할 일은 대화에 넣지 않는다
+                continue
+            if isinstance(o.get("code"), dict):
+                self.answer_code(o["code"], ans)
+                continue
+            if isinstance(o.get("codedone"), dict):
+                self.answer_codedone(o["codedone"], ans)
+                continue
             self.journal("user", f"(고양이 질문 '{clip(o.get('text'), 60)}'에) " + (str(ans) if ans else "답 안 하고 넘김"), kind="answer")
+            # 대화 중 되물은 질문: 버튼으로 답하면 그 답으로 이어서 대답한다 (대화창에 글로 답했으면 그 말에 이미 답한다)
+            if o.get("followup") and ans and o.get("via") != "chat":
+                self.st.setdefault("queued", []).append({"text": f"(고양이가 물은 '{clip(o.get('text'), 80)}'에 고른 답) {clip(ans, 200)}",
+                                                         "granted": [], "query": None})
+
+    # 코딩 작업 (code_tasks.py)
+    def ask_code(self, repo, task, request, agent):
+        agents = self.tasks.agents()
+        if not agents:
+            self.emit("코딩 도구(Claude Code·Codex·Cursor·Grok)가 하나도 안 보인다냥.", urgent=True)
+            return
+        if agent in agents:   # 고양이가 추천한 도구를 맨 앞에
+            agents = [agent] + [a for a in agents if a != agent]
+        labels = [code_tasks.AGENTS[a] for a in agents]
+        self.post_ask(f"🛠 {repo}에서 이 일을 맡길까냥?\n「{clip(task, 160)}」", labels + [CODE_NO], "code", 86400,
+                      detail=f"맡길 일 전체: {clip(task, 1500)}\n\n원래 말: {clip(request, 300)}\n"
+                             "새 브랜치(worktree)에서 하고, 끝나면 합칠지 묻는다. Codex 는 자체 샌드박스, 나머지는 macOS 샌드박스에서 "
+                             "worktree 밖 파일을 못 고친다 (읽기와 인터넷은 된다).",
+                      code={"repo": repo, "task": task, "request": request})
+        log(f"코딩 작업 확인 요청: {repo} ({clip(task, 60)})")
+
+    def answer_code(self, code, ans):
+        label_to = {v: k for k, v in code_tasks.AGENTS.items()}
+        agent = label_to.get(str(ans or ""))
+        self.journal("user", f"(코딩 작업 '{clip(code.get('task'), 60)}' 맡길까에) " + (str(ans) if ans else "답 안 하고 넘김"), kind="answer")
+        if not agent:
+            if ans:
+                self.emit("알겠다냥. 안 맡기겠다냥.", urgent=True)
+            return
+        t, err = self.tasks.start(agent, str(code.get("repo", "")), str(code.get("task", "")), str(code.get("request", "")))
+        if err:
+            self.emit(f"못 맡겼다냥. {err}냥.", urgent=True)
+            return
+        self.emit(f"{t['agent_name']}한테 맡겼다냥. {t['repo']}에서 하는 중이다냥. 끝나면 알려 주겠다냥.", urgent=True, kind="code")
+        self.tasks.write_summary(self.dir)
+
+    def answer_codedone(self, cd, ans):
+        tid = str(cd.get("task", ""))
+        self.journal("user", f"(끝난 코딩 작업에) " + (str(ans) if ans else "답 안 하고 넘김"), kind="answer")
+        if ans == MERGE:
+            ok, msg = self.tasks.merge(tid)
+        elif ans == DISCARD:
+            ok, msg = self.tasks.discard(tid)
+        else:
+            return
+        self.emit(("됐다냥. " if ok else "냥… ") + msg + "냥.", urgent=True, kind="code")
+
+    def watch_tasks(self):
+        for t in self.tasks.poll():
+            head = {"done": "끝냈다냥", "failed": "하다가 실패했다냥", "timeout": "너무 오래 걸려서 멈췄다냥", "cancelled": "멈췄다냥"}[t["state"]]
+            changed = f"파일 {t['files']}개 바꿨다냥" if t["files"] else "바뀐 파일은 없다냥"
+            self.emit(f"🛠 {t['agent_name']}가 {t['repo']} 작업을 {head}. {changed}.\n{clip(t.get('summary') or t.get('error'), 300)}",
+                      urgent=True, kind="code")
+            if t["files"]:
+                self.post_ask(f"🛠 {t['agent_name']} 작업 결과를 {t['base']}에 합칠까냥? ({t['stat'] or str(t['files']) + '개 파일'})",
+                              [MERGE, KEEP, DISCARD], "code", 7 * 86400,
+                              detail=f"할 일: {clip(t['task'], 160)}\n브랜치: {t['branch']}\n폴더: {t['worktree']}\n{clip(t.get('summary'), 400)}",
+                              codedone={"task": t["id"]})
+            elif t["state"] in ("done", "failed", "timeout", "cancelled"):
+                self.tasks.cleanup(t, delete_branch=True, force=True)
+        self.tasks.write_summary(self.dir)
+
+    # 시키면 하기: 앱이 할 일은 mind/act 로, 코딩은 묻고 나서
+    def commands(self):
+        """앱이 남긴 명령 목록 (mind/commands.json: [{id, title}])"""
+        return {str(c["id"]): str(c.get("title", c["id"])) for c in read_json(self.dir / "commands.json", []) if isinstance(c, dict) and c.get("id")}
+
+    def run_actions(self, actions, request):
+        cmds = self.commands()
+        repos = self.tasks.repos()
+        done = []
+        for n, a in enumerate((actions or [])[:3]):
+            if not isinstance(a, dict) or a.get("tool") not in ACTIONS:
+                continue
+            tool, arg, detail = a["tool"], str(a.get("arg", "")).strip(), str(a.get("detail", "")).strip()
+            if tool == "code":
+                if arg not in repos and len(repos) == 1:
+                    arg = next(iter(repos))
+                if arg in repos and detail:
+                    self.ask_code(arg, detail, request, a.get("agent"))
+                    done.append(tool)
+                continue
+            if tool == "todo":
+                if arg:
+                    self.post_todo(arg, detail)
+                    self.journal("cat", f"(할 일 남김) {clip(arg, 80)}", kind="action")
+                    done.append(tool)
+                continue
+            ok = {"open_app": 0 < len(arg) <= 60 and "/" not in arg,
+                  "open_url": arg.startswith("https://") and " " not in arg and len(arg) <= 500,
+                  "command": arg in cmds,
+                  "timer": arg.replace(".", "", 1).isdigit() and 0 < float(arg) <= 24 * 60}[tool]
+            if not ok:
+                log(f"할 일 버림: {tool} {clip(arg, 60)}")
+                continue
+            ts = self.now()
+            write_private(self.dir / "act" / f"{int(ts * 1000)}-{n}.json",
+                          json.dumps({"tool": tool, "arg": arg, "detail": clip(detail, 200), "ts": ts}, ensure_ascii=False))
+            done.append(tool)
+        return done
+
+    def collect_acts(self):
+        """앱이 실행한 결과 (mind/act/done/*.json) → 대화 기록 (다음 답이 무엇을 했는지 안다)"""
+        d = self.dir / "act" / "done"
+        if not d.exists():
+            return
+        for f in sorted(d.glob("*.json")):
+            o = read_json(f, {})
+            f.unlink(missing_ok=True)
+            label = ACTIONS.get(o.get("tool"), "?").split(" (")[0]
+            self.journal("cat", f"(한 일) {label}: {clip(o.get('arg'), 80)} → {'됨' if o.get('ok') else '안 됨'}"
+                         + (f" ({clip(o.get('result'), 80)})" if o.get("result") else ""), kind="action")
 
     # 사용자가 건 말
     def read_chat(self):
@@ -973,6 +1142,7 @@ class Mind:
         can = [TOOLS[t] for t in tools if t in TOOLS]
         length = ("- 대화창에서 답한다. 짧은 말엔 짧게, 질문엔 정확하고 충분하게 답한다 (400자 이내). 일반 지식은 아는 대로 답한다."
                   if kind == "chat" else "- 말풍선에 들어갈 1~2문장(80자 이내)만 쓴다.")
+        doing = self.actions_help() if kind == "chat" else ["# 시키면 하기", "- 지금은 먼저 말 거는 중이다. actions 는 빈 배열로 둔다.", ""]
         return "\n".join([
             "# 너는 누구인가", persona.strip(), "",
             *(["# 사용자가 정한 말투 규칙", *(f"- {r}" for r in rules), ""] if rules else []),
@@ -985,6 +1155,8 @@ class Mind:
             + ". 요청할 땐 say 에 왜 필요한지만 짧게 말한다. 지금 가진 것으로 충분하면 요청하지 않는다.", "",
             "# 규칙",
             "- 한국어로 쓴다. 꼭 필요할 때만 질문 하나를 ask 에 넣는다. 마크다운(**, [](), 표)은 쓰지 않는다. 말풍선은 그냥 글이다.", length,
+            "- 사용자 말이 애매하거나 여러 뜻으로 읽히면 짐작해서 하지 말고 ask 로 되묻는다. 고를 만한 답이 있으면 choices 에 짧은 보기(2~6개)를 "
+            "넣고, 여러 개를 함께 골라도 되는 질문(하고 싶은 것 고르기·투표)이면 multi 를 true 로 한다. 보기에 없는 답은 사용자가 글로 적을 수 있다.",
             "- 어미는 기본형 동사·형용사 뒤에 붙인다: 있다냥 / 했다냥 / 좋다냥 / 할까냥? / 하자냥. "
             "'있네다냥', '할까다냥?', '했어요냥'처럼 다른 어미 뒤에 붙이지 않는다.",
             "- 사용자의 활동·사정은 아래 정보에 있는 것만 말한다. 모르는 건 지어내지 말고 물어본다.",
@@ -997,8 +1169,28 @@ class Mind:
             "# 지금 상황 (맥 활동 기록을 로컬 모델이 요약한 것)",
             "<기록>", json.dumps(ctx, ensure_ascii=False, indent=1), "</기록>", "",
             "# 이번 대화", "<기록>", *(convo or ["(새 대화)"]), "</기록>", "",
+            *doing,
             "# 이번에 할 일", task,
         ])
+
+    def actions_help(self):
+        """대화 답에 넣는 '시키면 하기' 안내: 쓸 수 있는 도구 · 앱 명령 · 코딩 저장소"""
+        cmds = self.commands()
+        repos = self.tasks.repos()
+        agents = self.tasks.agents()
+        running = self.tasks.running()
+        return [
+            "# 시키면 하기 (actions)",
+            "- 사용자가 무언가를 해 달라고 분명히 시켰을 때만 actions 에 넣는다. 제안만 할 거면 넣지 않고 말로 묻는다.",
+            "- say 에는 무엇을 하는지 짧게 말한다 (예: 'Safari 열겠다냥'). 해 놓고 했다고 지어내지 않는다: 실행 결과는 다음 대화 기록에 '(한 일)'로 남는다.",
+            *(f"- {k}: {v}" for k, v in ACTIONS.items()),
+            "- Meowgent 명령 id: " + (" · ".join(f"{i}={t}" for i, t in cmds.items()) or "(앱이 아직 목록을 안 남겼다)"),
+            "- 코딩 저장소: " + (", ".join(repos) or "없음 (code 를 쓰지 않는다)")
+            + ". 도구: " + (", ".join(f"{a}={code_tasks.AGENTS[a]}" for a in agents) or "없음")
+            + ". code 의 detail 은 그 도구가 대화 없이 혼자 할 수 있게 목표·고칠 곳·끝난 기준을 구체적으로 쓴다. 저장소나 할 일이 애매하면 code 대신 되묻는다.",
+            *([f"- 지금 돌고 있는 코딩 작업: " + "; ".join(f"{t['agent_name']} · {t['repo']} · {clip(t['task'], 40)}" for t in running)] if running else []),
+            "",
+        ]
 
     def start_codex(self, job, ctx, task, model, effort, tools=(), query=None):
         self.codex.start(job, self.prompt(ctx, task, job["kind"], model, effort, tools, query), model, effort, tools)
@@ -1067,10 +1259,17 @@ class Mind:
             self.st["note"] = {"start": sess[0]["ts"] if sess else self.now(), "text": clip(res["note"], 400)}
         if ask and ask not in text:
             text += "\n❓ " + ask
-        # 보기가 있는 질문은 얼굴 옆 ? 로도 남겨 메뉴에서 고를 수 있게
-        if ask and res.get("choices") and self.open_asks() < self.cfg["ask_open_max"]:
-            self.post_ask(ask, [clip(c, 20) for c in res["choices"]])
+        choices = [clip(c, 24) for c in res.get("choices") or [] if str(c).strip()]
+        # 보기가 있는 질문은 얼굴 옆 ? 와 대화창·대시보드 버튼으로. 대화 중 되물은 건 수 제한 없이, 고르면 이어서 답한다
+        if ask and choices and chat:
+            for old in (self.data / "inbox").glob("mind-chat-*.json"):   # 앞서 되물은 건 새 질문으로 바뀐다
+                old.unlink(missing_ok=True)
+            self.post_ask(ask, choices, "chat", 6 * 3600, multi=bool(res.get("multi")), followup=True)
+        elif ask and choices and self.open_asks() < self.cfg["ask_open_max"]:
+            self.post_ask(ask, choices, multi=bool(res.get("multi")))
         self.emit(text, urgent=job["kind"] == "chat", kind=job.get("trig") or job["kind"])
+        if chat and res.get("actions"):
+            self.run_actions(res["actions"], job["text"])
         # 기억은 사용자가 직접 말을 건 때만 남긴다. 먼저 말 걸 때의 입력은 창 제목 같은 남이 정한 글이라 기억을 오염시킬 수 있다
         if res.get("remember") and chat:
             self.mem.add(res["remember"], "기억해 달라고 함")
@@ -1263,6 +1462,10 @@ class Mind:
             return
         self.read_afk()
         self.collect_answers()
+        self.collect_acts()
+        if self.now() - self.last_tasks >= 5:   # 코딩 작업은 Codex 가 바빠도 지켜본다
+            self.last_tasks = self.now()
+            self.watch_tasks()
         if self.now() - self.last_export >= 60:   # Codex 가 안 돼도 원문은 내보낸다
             self.last_export = self.now()
             self.export_transcripts()

@@ -205,6 +205,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         mind.say = { [weak p] l in p?.notify(l.text, urgent: l.urgent) }
         mind.trick = { [weak p] name in p?.trick(name) }
+        // 대화로 부를 수 있는 기능 (고양이가 actions 의 command 로 이 id 만 쓴다). 되돌리기 어려운 것(종료·권한·삭제)은 넣지 않는다
+        var cmds: [(id: String, title: String, run: () -> Void)] = [
+            ("dashboard", "대시보드 열기", { [weak self] in self?.dashboard.show() }),
+            ("dashboard_inbox", "대시보드 질문 탭", { [weak self] in self?.dashboard.showTab(.inbox) }),
+            ("dashboard_tasks", "대시보드 작업 탭 (맡긴 코딩)", { [weak self] in self?.dashboard.showTab(.tasks) }),
+            ("dashboard_thinking", "대시보드 생각 탭 (고양이 판단 기록)", { [weak self] in self?.dashboard.showTab(.thinking) }),
+            ("launcher", "앱 검색 런처 열기", { [weak self] in self?.launcher.show(.search) }),
+            ("clipboard", "클립보드 기록 열기", { [weak self] in self?.launcher.show(.clipboard) }),
+            ("resources", "리소스(CPU·메모리) 대시보드 열기", { [weak self] in self?.resources.openDashboard() }),
+            ("pause15", "활동 기록 15분 멈추기", { [weak self] in self?.pause(minutes: 15) }),
+            ("pause60", "활동 기록 1시간 멈추기", { [weak self] in self?.pause(minutes: 60) }),
+            ("resume", "활동 기록 다시 하기", { [weak self] in self?.resume() }),
+            ("pet_toggle", "고양이 숨기기·보이기", { [weak self] in self?.togglePet() }),
+            ("toys_off", "고양이 장난감 치우기", { [weak p] in p?.trick("toy-off") }),
+            ("data_folder", "데이터 폴더 열기", { [weak self] in self?.openData() }),
+        ]
+        for (id, name) in [("stretch", "기지개"), ("loaf", "식빵 굽기"), ("knead", "꾹꾹이"), ("run", "달리기"), ("jump", "점프"),
+                           ("groom", "그루밍"), ("wash", "고양이 세수"), ("sprawl", "쭉 뻗기"), ("home", "집으로 가기"), ("toy-yarn", "털실뭉치 꺼내기")] {
+            cmds.append(("trick_" + id, "고양이 재주: " + name, { [weak p] in p?.trick(id) }))
+        }
+        mind.commands = cmds
         PetController.tirednessSource = { [weak self] in self?.mind.isOff == false ? self?.mind.tiredness ?? 0 : 0 }
         mind.start()
         agents.frontBundle = { Context.shared.snapshot.bundle }

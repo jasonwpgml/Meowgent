@@ -468,5 +468,91 @@ check("검증 통과한 제안만 남김", [s["value"] for s in latest["suggesti
 check("지금 값·상태 같이 저장", latest["suggestions"][1]["current"] == 30 and all(s["status"] == "new" for s in latest["suggestions"]))
 check("한 번 하면 일주일 쉼", not m.improve_due())
 
+
+# 29) 되묻기: 대화 중 보기 있는 질문은 수 제한 없이 inbox 로, 복수 선택 표시, 버튼으로 답하면 이어서 답함
+import subprocess, time as _time
+m, clock, data = make(T0)
+m.cfg["late_hours"] = [0, 0]
+def answer(name, ans, **extra):
+    src = data / "inbox" / f"{name}.json"
+    o = json.loads(src.read_text()); o.update(answer=ans, resolved=clock.t, **extra)
+    (data / "inbox" / "done").mkdir(exist_ok=True)
+    (data / "inbox" / "done" / f"{name}.json").write_text(json.dumps(o, ensure_ascii=False)); src.unlink()
+def chat_reply(res, text="뭐 할까"):
+    m.codex.proc = None
+    m.finish({"kind": "chat", "text": text}, {"say": "골라라냥.", "ask": None, "choices": [], "multi": False, "remember": None,
+                                             "note": None, "need": None, "actions": [], **res}, 1.0)
+for i in range(3):
+    m.post_ask(f"먼저 묻기 {i}", ["예", "아니오"]); clock.t += 1
+chat_reply({"ask": "오늘 뭐 하고 싶냥?", "choices": ["코딩", "산책", "낮잠"], "multi": True})
+asks = sorted((data / "inbox").glob("mind-chat-*.json"))
+item = json.loads(asks[0].read_text()) if asks else {}
+check("대화 중 되물음은 제한 넘어도 올림", len(asks) == 1 and item.get("followup") is True)
+check("복수 선택 표시 + 보기 6개까지", item.get("multi") is True and [c["id"] for c in item["choices"]] == ["코딩", "산책", "낮잠"])
+clock.t += 1
+chat_reply({"ask": "다시 묻는다냥", "choices": ["가", "나"]})
+asks = sorted((data / "inbox").glob("mind-chat-*.json"))
+check("새로 되물으면 앞 질문은 바뀜", len(asks) == 1 and "다시" in asks[0].read_text() and "multi" not in json.loads(asks[0].read_text()))
+answer(asks[0].stem, "가, 나", answers=["가", "나"])
+m.collect_answers()
+q = m.st.get("queued") or []
+check("버튼 답 → 이어서 답할 줄에", len(q) == 1 and "가, 나" in q[0]["text"], q)
+m.st["queued"] = []
+chat_reply({"ask": "또 묻는다냥", "choices": ["예", "아니오"]})
+name = next((data / "inbox").glob("mind-chat-*.json")).stem
+answer(name, "그냥 알아서 해", via="chat")
+m.collect_answers()
+check("대화창에 글로 답했으면 줄 세우지 않음", not m.st.get("queued"))
+
+# 30) 시키면 하기: 앱 할 일은 mind/act 로 (검사 통과한 것만), 할 일은 inbox todo, 실행 결과는 대화 기록에
+(data / "mind" / "commands.json").write_text(json.dumps([{"id": "dashboard", "title": "대시보드 열기"}]))
+chat_reply({"say": "열겠다냥.", "actions": [
+    {"tool": "open_app", "arg": "Safari", "detail": "", "agent": "auto"},
+    {"tool": "open_url", "arg": "http://example.com", "detail": "", "agent": "auto"},
+    {"tool": "command", "arg": "dashboard", "detail": "", "agent": "auto"}]}, "사파리랑 대시보드 열어")
+acts = sorted(json.loads(f.read_text())["tool"] for f in (data / "mind" / "act").glob("*.json"))
+check("https 아닌 주소는 버리고 나머지만", acts == ["command", "open_app"], acts)
+check("모르는 명령 id 는 버림", not m.run_actions([{"tool": "command", "arg": "rm", "detail": "", "agent": "auto"}], "x"))
+check("먼저 말 걸 땐 actions 안내 없음", "빈 배열" in m.prompt({}, "x", "proactive") and "dashboard=대시보드 열기" in m.prompt({}, "x", "chat"))
+m.run_actions([{"tool": "todo", "arg": "이력서 고치기", "detail": "", "agent": "auto"}], "할 일 적어")
+todo = next((data / "inbox").glob("mind-todo-*.json"), None)
+check("할 일은 inbox 의 확인할 일로", todo is not None and json.loads(todo.read_text())["kind"] == "todo")
+(data / "mind" / "act" / "done").mkdir(parents=True, exist_ok=True)
+(data / "mind" / "act" / "done" / "1.json").write_text(json.dumps({"tool": "open_app", "arg": "Safari", "ok": True}))
+m.collect_acts()
+check("실행 결과가 대화 기록에", "(한 일) 앱 열기: Safari → 됨" in (data / "mind" / "conversation.jsonl").read_text())
+
+# 31) 코딩 맡기기: 늘 먼저 묻고 → 고르면 worktree 에서 (가짜) 에이전트 → 커밋 → 합칠지 묻고 → 합치기
+repo = Path(tempfile.mkdtemp()) / "demo"
+repo.mkdir()
+def g(*a): return subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True)
+g("init", "-q", "-b", "main"); (repo / "a.txt").write_text("a\n"); g("add", "."); g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+fake = Path(tempfile.mkdtemp())
+(fake / "claude").write_text('#!/bin/sh\necho "고양이 기능" > cat.txt\necho \'{"result":"cat.txt 만들었음"}\'\n'); os.chmod(fake / "claude", 0o755)
+os.environ["PATH"] = f"{fake}:{os.environ['PATH']}"
+m.cfg.update(code_repos={"demo": str(repo)}, code_agents=["claude"])
+chat_reply({"say": "맡길까냥?", "actions": [{"tool": "code", "arg": "demo", "detail": "cat.txt 를 만든다", "agent": "claude"}]}, "고양이 기능 만들어")
+ask = next((data / "inbox").glob("mind-code-*.json"), None)
+o = json.loads(ask.read_text()) if ask else {}
+check("코딩은 바로 안 하고 먼저 물음", ask is not None and [c["id"] for c in o["choices"]] == ["Claude Code", "안 돼"] and not m.tasks.all())
+answer(ask.stem, "Claude Code")
+m.collect_answers()
+t = (m.tasks.all() or [{}])[0]
+check("고르면 worktree 에서 시작", t.get("state") == "running" and Path(t["worktree"]).is_dir() and t["branch"].startswith("meowgent/"), t)
+for _ in range(50):
+    if (m.tasks.dir / t["id"] / "exit").exists(): break
+    _time.sleep(0.1)
+clock.t += 10
+m.watch_tasks()
+t = m.tasks.get(t["id"])
+check("끝나면 커밋하고 요약", t["state"] == "done" and t["files"] == 1 and t["summary"] == "cat.txt 만들었음", t)
+merge = next((data / "inbox").glob("mind-code-*.json"), None)
+check("합칠지 묻는다", merge is not None and "합치기" in merge.read_text())
+check("원래 저장소는 아직 그대로", not (repo / "cat.txt").exists())
+answer(merge.stem, "합치기")
+m.collect_answers()
+check("합치면 main 에 들어가고 worktree 정리", (repo / "cat.txt").exists() and m.tasks.get(t["id"])["state"] == "merged" and not Path(t["worktree"]).exists())
+check("허락 안 한 저장소는 안 맡김", m.tasks.start("claude", "other", "x", "x")[1] is not None)
+
 print("\n" + ("모두 통과" if not failed else f"{failed}개 실패"))
 sys.exit(1 if failed else 0)

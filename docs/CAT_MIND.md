@@ -216,6 +216,8 @@ python3 -I brain/test_mind.py
 - 인식 문맥에 "냥이, 고양이, Meowgent, 프로젝트 이름"을 넣어 오인식을 줄인다.
 
 **2-3 시키면 하기** (루프 + 앱)
+
+> 2026-11-04 1차 구현됨 — 아래 "시키면 하기 · 되묻기 (구현)"을 본다. 아래 표는 처음 계획이다.
 - 모델에게 셸을 주지 않는다. 답 형식에 `actions: [{tool, args}]`를 추가하고, `tool`은 정해진 목록(enum)으로 고정한다.
 - 루프가 형식을 검사하고, 실행은 앱의 고정 코드가 맡는다. 실행 결과는 다음 대화에 기록한다.
 
@@ -239,3 +241,65 @@ python3 -I brain/test_mind.py
 ### 정해야 할 것
 - coding_task를 허용할 저장소 목록, 단축어 허용 목록
 - 고양이가 소리 내 말하기를 기본으로 켤지
+
+---
+
+## 시키면 하기 · 되묻기 (2026-11-04 구현)
+
+대화로 앱을 다루고, 애매하면 고양이가 되묻고, 코딩은 다른 에이전트에게 맡긴다. 코드: `brain/cat_mind.py`(답 형식·검사), `brain/code_tasks.py`(코딩 작업), `MindBridge.swift`(실행), `MindChat.swift`·`Dashboard.swift`(버튼·체크 상자·작업 탭).
+
+### 답 형식에 더한 것 (`SCHEMA`)
+
+| 필드 | 뜻 |
+|---|---|
+| `choices` | 보기 0~6개 (전엔 4개) |
+| `multi` | 여러 개 골라도 되는 질문(하고 싶은 것 고르기·투표). 앱은 체크 상자와 "n개 고르기"로 보이고 `answer`에 "A, B", `answers`에 목록을 붙인다 |
+| `actions` | 사용자가 시킨 일 0~3개 `{tool, arg, detail, agent}`. 대화 답에서만 쓰고, 먼저 말 걸 땐 빈 배열 |
+
+### 되묻기
+
+- 프롬프트 규칙: 말이 애매하거나 여러 뜻이면 짐작하지 말고 `ask`로 되묻는다. 보기가 있으면 `choices`, 여러 개 골라도 되면 `multi`.
+- 대화 중 되물은 질문은 `inbox/mind-chat-*.json`(`followup: true`, 6시간)으로 간다. 먼저 묻는 질문 수 제한(`ask_open_max`)에 안 세고, 새로 되물으면 앞의 것은 지운다.
+- 버튼(대화창·대시보드·고양이 메뉴)으로 답하면 cat_mind가 그 답으로 이어서 대답한다. 대화창에 글로 답하면 그 말이 질문의 답이 되고(`via: "chat"`), 그 말에는 평소처럼 답한다.
+- 2026-11-04 실측: 대시보드에서 "코딩"을 고르자 8.7초 뒤 "오늘 저녁은 코딩이다냥…"으로 이어서 답했다.
+
+### 시키면 하기 (`actions`)
+
+cat_mind가 검사하고, 앱의 정해진 코드만 실행한다. 결과는 `mind/act/done/`으로 돌아와 대화 기록에 "(한 일) …"로 남는다(다음 답이 무엇을 했는지 안다).
+
+| tool | 실행 | 검사 |
+|---|---|---|
+| `open_app` | 앱 목록(`AppIndex`)에서 Finder 이름·파일 이름이 같은 앱, 없으면 앞이 같은 앱 | 60자 이하, `/` 없음 |
+| `open_url` | 기본 브라우저 | `https://`만 |
+| `command` | 앱이 `mind/commands.json`에 남긴 기능 (대시보드·탭, 런처, 클립보드, 리소스, 기록 멈추기·다시, 고양이 숨기기·재주 등) | 목록에 있는 id만. 종료·권한·삭제는 목록에 넣지 않았다 |
+| `timer` | N분 뒤 말풍선 | 0~1440분. 앱을 끄면 사라진다 |
+| `todo` | `inbox/mind-todo-*.json` 확인할 일 (얼굴 옆 ! · 대시보드) | 비어 있지 않음 |
+| `code` | 아래 코딩 작업 | 늘 먼저 묻는다 |
+
+### 코딩 맡기기 (`code_tasks.py`)
+
+1. `code`가 오면 바로 하지 않고 "🛠 <저장소>에서 이 일을 맡길까냥?"을 묻는다. 보기는 설치된 도구(고양이 추천을 맨 앞, 나머지는 `code_agents` 순서)와 "안 돼".
+2. 도구를 고르면 저장소에 `meowgent/<id>` 브랜치로 worktree(`mind/tasks/<id>/wt`)를 만들고 그 안에서 CLI를 백그라운드로 돌린다. 실행 방식은 Agent Hub `agent-job.sh`와 같다.
+
+| 도구 | 실행 |
+|---|---|
+| Claude Code | `claude -p … --output-format json --permission-mode acceptEdits` + 확인용 명령(`git diff/status/log`, `swift build`, `python3 -I`, `ls`)만 허용 |
+| Codex | `codex exec --sandbox workspace-write -C <worktree> -o last.txt` (고양이 계정이 아니라 평소 `~/.codex`) |
+| Cursor | `cursor-agent -p --trust --force --workspace <worktree>` |
+| Grok | `grok -p … --always-approve --cwd <worktree>` |
+
+   - **샌드박스**: Codex는 자체 `workspace-write`. Claude Code·Cursor·Grok은 자동 승인으로 돌아서 `sandbox-exec`로 감싸 쓰기를 worktree·그 git 폴더(`.git/worktrees/<이름>`)·도구 자기 설정(`~/.claude*`·`~/.cursor`·`~/.grok`)·임시 폴더·`~/Library/Caches`로 막는다. 읽기와 인터넷(모델 API)은 막지 않는다. 확인 질문의 설명에 맡길 일 전체를 보여 준다. 2026-11-04 실측: 샌드박스 안에서 바깥 쓰기는 "Operation not permitted", 세 도구 모두 작은 작업을 정상으로 끝냈다.
+3. 에이전트에겐 커밋·푸시·브랜치 바꾸기·되돌리기 어려운 일을 하지 말고, 끝에 "바꾼 것 / 확인한 것 / 확인 못 한 것"을 쓰라고 한다. 끝나면 cat_mind가 worktree에서 커밋하고 말풍선으로 요약한다.
+4. 바뀐 파일이 있으면 "합치기 · 그대로 두기 · 버리기"를 묻는다. 합치기는 저장소가 시작 때 브랜치에 있고 커밋 안 한 변경이 없을 때만 `--no-ff`로 합친다. 충돌이면 되돌리고 브랜치를 남긴다. **푸시는 하지 않는다.**
+5. 대시보드 "작업" 탭(⌘5): 하는 중·끝난 작업, 요약, 브랜치, 폴더 열기·기록 보기·멈추기(`mind/tasks/<id>/cancel`). 대화창 상태 줄에 "🛠 Claude Code · Meowgent 작업 중 · 3분째".
+
+설정(`mind.json`): `code_repos`(이름→경로, 비면 `install.sh`가 남긴 이 저장소 하나), `code_agents`(보기 순서), `code_max_running`(2), `code_timeout_s`(3600).
+
+- 2026-11-04 실측: 임시 저장소에서 진짜 Claude Code·Cursor·Grok으로 파일 하나 만들기 → 모두 끝, 커밋 1개씩, 요약 3줄. Codex는 플래그만 확인했고 실제로 돌려 보지 않았다.
+- worktree엔 서브모듈(`pet/`)이 안 따라온다. Meowgent 저장소 작업은 `setup-pet.sh`가 빈 껍데기로 빌드한다.
+
+### 아직 안 한 것
+
+- 도구 고르는 우선순위(일 종류·남은 한도별). 지금은 고양이 추천 + 고정 순서이고, 사용자와 나중에 정한다.
+- 빠른 길(Codex 없이 Clef·정규식으로 앱 열기·타이머), 단축어·미리 알림·음악, 음성으로 시킨 일 한 번 더 확인.
+- 작업 결과를 다른 모델이 검토하기, 합친 뒤 푸시.

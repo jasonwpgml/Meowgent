@@ -44,6 +44,9 @@ MIND_LABEL="com.jason.meowgent.mind"
 MIND_PLIST="$HOME/Library/LaunchAgents/$MIND_LABEL.plist"
 MIND_DIR="$HOME/Library/Application Support/Meowgent/mind"
 cp cat_mind.py "$DEST/cat_mind.py"
+cp code_tasks.py "$DEST/code_tasks.py"
+# 고양이에게 코딩을 맡길 때 기본으로 허락하는 저장소 (mind.json 의 code_repos 가 비어 있을 때)
+git -C .. rev-parse --show-toplevel > "$DEST/repo_path"
 mkdir -p "$MIND_DIR" && chmod 700 "$MIND_DIR"
 # 말하는 고양이의 성격 (없으면 cat_mind 의 DEFAULT_PERSONA)
 install -m 600 persona.md "$MIND_DIR/persona.md"

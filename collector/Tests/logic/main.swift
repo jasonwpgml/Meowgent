@@ -504,5 +504,21 @@ do {
     check("개선 제안 읽기", imp?.suggestions.count == 2 && imp?.suggestions[0].current == "30" && imp?.suggestions[1].status == "ignored", "\(String(describing: imp))")
 }
 
+// 여러 개 고르는 질문 (고양이 되묻기·투표) · 고양이가 맡긴 코딩 작업
+do {
+    let now = 1_800_000_000.0
+    let multi = ["kind": "ask", "text": "뭐 할래", "source": "고양이", "choices": ["코딩", "산책"], "multi": true] as [String: Any]
+    let a = InboxRules.parse(multi, file: "m1.json", now: now)!, b = InboxRules.parse(multi, file: "m2.json", now: now)!
+    check("multi 읽기", a.multi && !InboxRules.parse(["kind": "todo", "text": "x", "multi": true], file: "t.json", now: now)!.multi)
+    check("보기 하나면 multi 아님", !InboxRules.parse(["kind": "ask", "text": "x", "choices": ["예"], "multi": true], file: "o.json", now: now)!.multi)
+    check("multi 질문은 묶지 않음", InboxRules.group([a, b]).count == 2)
+    let run = TaskRules.parse(["id": "t1", "agent_name": "Claude Code", "repo": "Meowgent", "task": "고치기", "state": "running", "started": now - 600])!
+    let done = TaskRules.parse(["id": "t2", "agent_name": "Codex", "repo": "Meowgent", "task": "x", "state": "done", "started": now - 60, "ended": now, "files": 3])!
+    check("하는 중이 먼저", [done, run].sorted(by: TaskRules.order).map(\.id) == ["t1", "t2"])
+    check("작업 한 줄", TaskRules.subtitle(run, now: now) == "Claude Code · Meowgent · 하는 중 10분째" && TaskRules.subtitle(done, now: now).hasSuffix("1분 걸림 · 파일 3개"),
+          TaskRules.subtitle(done, now: now))
+    check("id 없으면 버림", TaskRules.parse(["state": "done"]) == nil)
+}
+
 print(failed == 0 ? "\n모두 통과" : "\n실패 \(failed)건")
 exit(failed == 0 ? 0 : 1)

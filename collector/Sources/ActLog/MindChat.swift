@@ -27,6 +27,8 @@ final class MindChat: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private var voiceSend = false          // 받아 적기가 끝나면 바로 보낼지 (단축키를 길게 눌렀을 때)
     private var note: String?              // 잠깐 보여 줄 상태 글
     private var previous: NSRunningApplication?   // 창을 열기 전 앞에 있던 앱 (닫으면 돌려준다)
+    private var picked: [String] = []      // 여러 개 고르는 질문에서 체크한 보기 (고른 순서)
+    private var pickedAsk = ""
 
     static let width: CGFloat = 360
     /// 대화창에 보여 주는 만큼. 더 지난 원문은 AI Archive Hub(AND)에 있다
@@ -162,6 +164,21 @@ final class MindChat: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         reload(force: true)
     }
 
+    /// 여러 개 고르는 질문: 체크 상자
+    @objc private func togglePick(_ sender: NSButton) {
+        guard let o = sender.cell?.representedObject as? [String], o.count == 2 else { return }
+        if pickedAsk != o[0] { pickedAsk = o[0]; picked = [] }
+        if sender.state == .on { if !picked.contains(o[1]) { picked.append(o[1]) } } else { picked.removeAll { $0 == o[1] } }
+        reload(force: true)
+    }
+
+    @objc private func submitPicks(_ sender: NSButton) {
+        guard let id = sender.cell?.representedObject as? String, pickedAsk == id, !picked.isEmpty else { return }
+        bridge.answer(askID: id, choices: picked)
+        picked = []
+        reload(force: true)
+    }
+
     // MARK: 상태
 
     private func flash(_ text: String) {
@@ -186,6 +203,7 @@ final class MindChat: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             let secs = bridge.thinkingSince.map { Int(Date().timeIntervalSince($0)) } ?? 0
             s = secs >= 3 ? "생각 중이다냥 · \(secs)초" : "생각 중이다냥 ···"
         }
+        else if let t = bridge.tasksLine { s = t }
         else { s = bridge.quotaLine ?? "옆에서 쉬는 중이다냥" }
         status.stringValue = s
     }
@@ -200,7 +218,7 @@ final class MindChat: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         let cutOff = convo.count < recent.count
         pending.removeAll { p in convo.contains { $0.role == "user" && $0.text == p.text && $0.ts >= p.ts - 2 } || Date().timeIntervalSince1970 - p.ts > 30 }
         let ask = bridge.openAsk()
-        let stamp = "\(convo.last?.ts ?? 0)|\(convo.count)|\(pending.count)|\(ask?.id ?? "")"
+        let stamp = "\(convo.last?.ts ?? 0)|\(convo.count)|\(pending.count)|\(ask?.id ?? "")|\(picked.joined(separator: ","))"
         refreshStatus()
         guard force || stamp != shownStamp else { return }
         shownStamp = stamp
@@ -225,18 +243,45 @@ final class MindChat: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         askBox.arrangedSubviews.forEach { $0.removeFromSuperview() }
         askBox.isHidden = ask == nil
         if let ask {
-            let q = NSTextField(wrappingLabelWithString: "❓ " + ask.text)
+            if pickedAsk != ask.id { pickedAsk = ask.id; picked = [] }
+            let q = NSTextField(wrappingLabelWithString: "❓ " + ask.text + (ask.multi ? "  (여러 개 골라도 된다냥)" : ""))
             q.textColor = Self.cream; q.font = .systemFont(ofSize: 12, weight: .medium)
+            q.preferredMaxLayoutWidth = Self.width - 32
             askBox.addArrangedSubview(q)
-            let buttons = NSStackView(); buttons.orientation = .horizontal; buttons.spacing = 6
-            for c in ask.choices.prefix(4) {
-                let b = NSButton(title: c, target: self, action: #selector(choose(_:)))
-                if #available(macOS 26, *) { b.bezelStyle = .glass } else { b.bezelStyle = .rounded }
+            // 보기는 한 줄에 3개씩. 여러 개 고르기는 체크 상자 + "고르기"
+            let views: [NSView] = ask.choices.prefix(6).map { c in
+                let b: NSButton
+                if ask.multi {
+                    b = NSButton(checkboxWithTitle: c, target: self, action: #selector(togglePick(_:)))
+                    b.state = picked.contains(c) ? .on : .off
+                    b.attributedTitle = NSAttributedString(string: c, attributes: [.foregroundColor: Self.cream, .font: NSFont.systemFont(ofSize: 12)])
+                } else {
+                    b = NSButton(title: c, target: self, action: #selector(choose(_:)))
+                    if #available(macOS 26, *) { b.bezelStyle = .glass } else { b.bezelStyle = .rounded }
+                }
                 b.controlSize = .small
+                b.lineBreakMode = .byTruncatingTail
                 b.cell?.representedObject = [ask.id, c]
-                buttons.addArrangedSubview(b)
+                return b
             }
-            askBox.addArrangedSubview(buttons)
+            for n in stride(from: 0, to: views.count, by: 3) {
+                let row = NSStackView(views: Array(views[n..<min(n + 3, views.count)]))
+                row.orientation = .horizontal; row.spacing = ask.multi ? 10 : 6
+                askBox.addArrangedSubview(row)
+            }
+            if ask.multi {
+                let go = NSButton(title: picked.isEmpty ? "고르기" : "\(picked.count)개 고르기", target: self, action: #selector(submitPicks(_:)))
+                if #available(macOS 26, *) { go.bezelStyle = .glass } else { go.bezelStyle = .rounded }
+                go.controlSize = .small
+                go.isEnabled = !picked.isEmpty
+                go.cell?.representedObject = ask.id
+                askBox.addArrangedSubview(go)
+            }
+            if ask.followup {
+                let hint = NSTextField(labelWithString: "보기에 없으면 아래에 적어도 된다냥")
+                hint.font = .systemFont(ofSize: 10); hint.textColor = Self.cream.withAlphaComponent(0.45)
+                askBox.addArrangedSubview(hint)
+            }
         }
         DispatchQueue.main.async { [weak self] in
             guard let self, let doc = self.scroll.documentView else { return }
