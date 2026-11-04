@@ -604,6 +604,11 @@ for bad, said in [("https://youtube.com.evil.com/", "유튜브 열어"), ("https
                   ("https://www.google.com/url?q=https%3A%2F%2Fevil.example", "google.com 열어"), ("https://github.com//evil.example", "github.com 열어")]:
     m.run_actions(url(bad), said)
 check("이름이 가리키는 호스트 밖·넘겨주기 주소는 묻는다", not acts(), [f.read_text() for f in acts()])
+for bad in ("https://www.google.com/amp/s/evil%2eexample", "https://www.google.com/amp/s/evil。example", "https://www.google.com/x?q=evil%252eexample",
+            "https://www.google.com/x?q=evil．example", "https://www.google.com/x?q=%2525252e", "https://www.google.com/x?q=1.2.3.4",
+            "https://www.google.com/x?q=[::1]", "https://www.youtube.com/attribution_link?u=%2Fwatch", "https://www.google.com/x#a@b"):
+    m.run_actions(url(bad), "구글 유튜브 열어")
+check("%xx·점 모양 글자로 감싼 넘겨주기도 묻는다", not acts(), [f.read_text() for f in acts()])
 opened = []
 for u, said in [("https://m.youtube.com/results?search_query=고양이", "유튜브에서 고양이 찾아"), ("https://www.google.com/search?q=날씨", "구글에서 날씨"),
                 ("https://ko.wikipedia.org/wiki/고양이", "위키백과 고양이")]:

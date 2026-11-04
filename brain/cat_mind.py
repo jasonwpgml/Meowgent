@@ -23,7 +23,9 @@ import sqlite3
 import subprocess
 import sys
 import time
+import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -164,8 +166,10 @@ SITE_NAMES = {
     ("트위터", "twitter"): ("x.com", "twitter.com"),
     ("레딧", "reddit"): ("reddit.com",),
 }
-# 바로 여는 주소라도 경로·쿼리에 다른 주소를 품었거나 넘겨주기(redirect) 경로면 묻는다 (google.com/url?q=… 같은 우회)
-BOUNCE_RE = re.compile(r"https?|%2f|%3a|//|redirect|/url\b|/link\b|/out\b|/away\b|(?:[a-z0-9-]+\.)+[a-z]{2,}", re.I)
+# 바로 여는 주소라도 경로·쿼리·# 뒤에 다른 주소를 만들 수 있는 글자가 있으면 묻는다 (google.com/url?q=… 같은 넘겨주기 우회).
+# 금지어를 늘어놓는 대신, %xx 를 다 풀고 。．｡ 같은 점 모양을 . 으로 바꾼 뒤 . : @ \ // 가 하나라도 있으면 묻는다.
+# 이게 없으면 호스트 이름(도메인·IP·IPv6)을 적을 수 없다. 이름 붙은 넘겨주기 경로는 덤으로 막는다
+BOUNCE_WORDS = ("redirect", "/url", "/link", "/out", "/away", "/amp", "attribution", "continue=", "next=", "goto")
 
 SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -996,11 +1000,25 @@ class Mind:
         m = URL_RE.fullmatch(arg)
         return m.group(1).lower() if m else None
 
+    @staticmethod
+    def bounces(rest):
+        """호스트 뒤(포트·경로·쿼리·#)가 다른 주소로 넘겨줄 수 있는 모양인지 (BOUNCE_WORDS 위 설명)"""
+        rest = re.sub(r"^:\d{1,5}", "", rest)
+        for _ in range(4):
+            rest, prev = urllib.parse.unquote(rest), rest
+            if rest == prev:
+                break
+        else:
+            return True   # 네 번 풀어도 또 풀리면 일부러 감싼 것
+        rest = unicodedata.normalize("NFKC", rest).lower()
+        rest = re.sub(r"[\u3002\uff0e\uff61\u2024\ufe52]", ".", rest)
+        return any(c in rest for c in ".:@\\") or "//" in rest or any(w in rest for w in BOUNCE_WORDS)
+
     @classmethod
     def needs_confirm(cls, tool, arg, said):
         if tool == "open_url":   # 넘겨주기 주소가 아니고, 사용자 말 속 도메인(이나 그 하위 주소) 또는 말한 SITE_NAMES 호스트일 때만 바로 연다
             m = URL_RE.fullmatch(arg)
-            if not m or BOUNCE_RE.search(arg[m.end(1):]):
+            if not m or cls.bounces(arg[m.end(1):]):
                 return True
             host = m.group(1).lower().removeprefix("www.")
             names = {h.lower().removeprefix("www.") for h in HOST_IN_TEXT.findall(said)}
