@@ -434,7 +434,74 @@ do {
     check("대화 답은 경고 아님", !NoticeRules.isWarning(.init(text: "날씨 도구는 이렇다냥", ts: 1, urgent: true), chat: chatSet)
           && NoticeRules.isWarning(.init(text: "컨텍스트 85%다", ts: 1, urgent: true), chat: chatSet)
           && !NoticeRules.isWarning(.init(text: "저녁", ts: 1, urgent: false), chat: chatSet))
+    let qs = ["10/27 02:41부터 22분 Claude에서 한 일은 어느 프로젝트?", "10/26 01:37부터 28분 Claude에서 한 일은 어느 프로젝트?"]
+    let suf = InboxRules.commonSuffix(qs)
+    check("묶음 공통 문구 (낱말 단위)", suf == "Claude에서 한 일은 어느 프로젝트?", suf ?? "nil")
+    check("공통 문구 뺀 앞부분", InboxRules.stripSuffix(qs[0], suf) == "10/27 02:41부터 22분")
+    check("공통 문구가 짧으면 없음", InboxRules.commonSuffix(["사과 먹을까?", "배 먹을까?"]) == nil)
+    check("알림 종류", NoticeRules.category("Claude ‘x’ 컨텍스트 85%다") == .context && NoticeRules.category("⛔ Codex 주간 한도 다 썼다냥") == .quota
+          && NoticeRules.category("🧠 메모리가 빠듯하다냥\n제일 큰 앱") == .memory && NoticeRules.category("Claude ‘y’ 답 끝났다. 읽어 봐 ✅") == .done
+          && NoticeRules.category("하암… 돌아왔냥") == .other)
+    check("목록 글에서 이모지 떼기", NoticeRules.plain("🧠 메모리가 빠듯하다냥\n제일 큰 앱: A") == "메모리가 빠듯하다냥\n제일 큰 앱: A"
+          && NoticeRules.plain("Claude ‘x’ 답 끝났다. 읽어 봐 ✅") == "Claude ‘x’ 답 끝났다. 읽어 봐" && NoticeRules.plain("50분 일했다") == "50분 일했다"
+          && NoticeRules.plain("⏳ Cursor 주간 53%") == "Cursor 주간 53%")
     check("숫자만 다른 첫 줄은 접음, 세션이 다르면 따로", ctx.map(\.count) == [1, 2] && ctx.last?.text.contains("85%") == true, "\(ctx.map(\.count))")
+}
+
+// 고양이 말: 답 끝남 묶기 · 컨텍스트 단계 · 같은 알림 쉬기 · 말투
+do {
+    typealias B = NoticeBatch
+    let one = B.doneLine([.init(agent: "Claude", name: "x")])!
+    check("하나 끝남 (~다냥)", one == "Claude ‘x’ 답 끝났다냥. 읽어 봐라냥 ✅", one)
+    check("Codex 끝남", B.doneLine([.init(agent: "Codex", name: "y")]) == "Codex ‘y’ 일 끝났다냥. 가 봐라냥 ✅")
+    let many = B.doneLine((1...6).map { .init(agent: $0 % 2 == 0 ? "Codex" : "Claude", name: "s\($0)") })!
+    check("여럿은 한 마디로 묶음", many.hasPrefix("✅ 6개 끝났다냥.") && many.contains("Claude ‘s1’ · Codex ‘s2’") && many.hasSuffix("외 2개"), many)
+    check("없으면 말 안 함", B.doneLine([]) == nil)
+    check("컨텍스트 단계", B.contextStep(49) == 0 && B.contextStep(50) == 50 && B.contextStep(85) == 80 && B.contextStep(93) == 90)
+    check("컨텍스트 말투", B.contextLine(agent: "Claude ‘a’", pct: 91, step: 90) == "Claude ‘a’ 컨텍스트 91%다냥. 정리(compact)하거나 새 세션으로 넘기라냥"
+          && B.contextLine(agent: "Codex ‘b’", pct: 55, step: 50).hasSuffix("절반 넘었다냥 (55%)"))
+    var g = B.Gate(normal: 1800, urgent: 600)
+    check("처음은 말함", g.allow("🧠 메모리가 빠듯하다냥\n큰 앱: A 3GB", urgent: false, now: 0))
+    check("숫자만 다른 같은 알림은 쉼", !g.allow("🧠 메모리가 빠듯하다냥\n큰 앱: B 4GB", urgent: false, now: 600))
+    check("쉬는 시간 지나면 다시", g.allow("🧠 메모리가 빠듯하다냥\n큰 앱: C 5GB", urgent: false, now: 2000))
+    check("다른 알림은 따로", g.allow("저녁 먹어라냥", urgent: false, now: 2001))
+    check("급한 건 짧게 쉼", g.allow("⛔ 한도 다 썼다냥", urgent: true, now: 0) && !g.allow("⛔ 한도 다 썼다냥", urgent: true, now: 300) && g.allow("⛔ 한도 다 썼다냥", urgent: true, now: 700))
+}
+
+// 문구·설정 표 · 판단 기록 · 개선 제안
+do {
+    typealias P = PhraseTable
+    check("자리표시 빠진 문구는 거절", P.validate(kind: "phrase", key: "done.claude", value: "답 끝났다냥") == nil)
+    check("자리표시 다 있으면 통과", P.validate(kind: "phrase", key: "done.claude", value: "{agent} ‘{name}’ 다 됐다냥") != nil)
+    check("모르는 키는 거절", P.validate(kind: "phrase", key: "nope", value: "x") == nil && P.validate(kind: "param", key: "nope", value: "1") == nil)
+    check("설정은 범위 안으로", P.validate(kind: "param", key: "gate.normal_min", value: "999") == "240.0" && P.validate(kind: "param", key: "done.window_s", value: "abc") == nil)
+    check("자리표시 채우기", P.fill("{agent} ‘{name}’", ["agent": "Claude", "name": "x"]) == "Claude ‘x’")
+    var custom = P.defaults
+    custom.phrases["done.claude"] = "{agent} ‘{name}’ 끝냥"
+    custom.params["context.high_pct"] = 70
+    check("표 문구를 씀", NoticeBatch.doneLine([.init(agent: "Claude", name: "a")], table: custom) == "Claude ‘a’ 끝냥")
+    check("표 설정으로 단계", NoticeBatch.contextStep(75, table: custom) == 70 && NoticeBatch.contextStep(75) == 50)
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("phr-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let saved = P.current
+    P.current = P.load(dir: dir)
+    check("처음 읽으면 기본값으로 파일 만듦", FileManager.default.fileExists(atPath: dir.appendingPathComponent("phrases.json").path) && P.current == P.defaults)
+    check("적용하면 표와 파일이 같이 바뀜", P.apply(kind: "param", key: "gate.normal_min", value: "45", dir: dir) && P.current.param("gate.normal_min") == 45
+          && P.load(dir: dir).param("gate.normal_min") == 45)
+    check("맞지 않는 값은 적용 안 함", !P.apply(kind: "phrase", key: "done.many", value: "끝났다냥", dir: dir))
+    P.current = saved
+
+    let decs = ThinkRules.parse("""
+    {"ts":1,"kind":"proactive","trig":"back","facts":"1시간 비웠다 돌아옴","p":0.71,"mode":"chat","outcome":"said","took":8.9,"text":"왔냥"}
+    {"ts":2,"kind":"proactive","trig":"late","p":0.2,"mode":"quiet","outcome":"quiet"}
+    {"ts":3,"kind":"chat","outcome":"timeout","took":120}
+    깨진 줄
+    """)
+    check("판단 기록 읽기", decs.count == 3)
+    check("판단 제목", ThinkRules.title(decs[0]) == "돌아옴 · 가볍게 · 말함" && ThinkRules.title(decs[2]) == "말 걸어 옴 · 시간 초과", ThinkRules.title(decs[0]))
+    check("판단 부제", ThinkRules.subtitle(decs[0]) == "1시간 비웠다 돌아옴 · 말할 확률 0.71 · 8.9초", ThinkRules.subtitle(decs[0]))
+    let imp = ThinkRules.parseImprove(Data(#"{"ts":5,"summary":"잦다","suggestions":[{"id":"a","kind":"param","key":"gate.normal_min","value":"45","current":30,"why":"w","status":"new"},{"id":"b","kind":"idea","key":"","value":"새벽엔 조용히","current":null,"why":"","status":"ignored"}]}"#.utf8))
+    check("개선 제안 읽기", imp?.suggestions.count == 2 && imp?.suggestions[0].current == "30" && imp?.suggestions[1].status == "ignored", "\(String(describing: imp))")
 }
 
 print(failed == 0 ? "\n모두 통과" : "\n실패 \(failed)건")

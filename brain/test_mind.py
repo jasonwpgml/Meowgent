@@ -51,7 +51,7 @@ def make(t0, episodes=()):
             db.execute("INSERT INTO decisions(episode_id,qset,question,answer,confidence) VALUES(?,?,?,?,?)", (eid, "v1", q, a, c))
     db.commit()
     clock = Clock(t0)
-    m = M.Mind(data=data, clef=FakeClef(), codex=FakeCodex(), now=clock)
+    m = M.Mind(data=data, clef=FakeClef(), codex=FakeCodex(), now=clock, idle=lambda: 0)
     m.st["active_since"] = t0
     return m, clock, data
 
@@ -382,7 +382,7 @@ check("내보내고 정리한 대화는 지움", all(c["ts"] > m.st["digested_un
 # 26) 보안: write 는 손으로 allow 에 적어도 안 켜진다, 항상 허락 web·read 는 같이 안 켜진다, 자동으로 다시 답할 땐 맥·웹 허락이 안 따라간다
 data = Path(tempfile.mkdtemp()); (data / "mind").mkdir()
 (data / "mind" / "mind.json").write_text(json.dumps({"allow": ["write", "web", "read"]}))
-m = M.Mind(data=data, clef=FakeClef(), codex=FakeCodex(), now=Clock(T0))
+m = M.Mind(data=data, clef=FakeClef(), codex=FakeCodex(), now=Clock(T0), idle=lambda: 0)
 m.cfg["late_hours"] = [0, 0]
 check("allow 의 write 는 버림", m.cfg["allow"] == ["web", "read"], m.cfg["allow"])
 check("항상 허락 web·read 는 하나만", M.run_tools(["web", "read"], []) == ["web"], M.run_tools(["web", "read"], []))
@@ -405,6 +405,68 @@ m2.codex.result = {**m2.codex.result, "say": "어렵다냥.", "need": {"tool": "
 m2.tick()
 job = m2.codex.started[-1][0]
 check("자동으로 astra 넘길 땐 write 허락이 안 따라감", job["granted"] == ["astra"] and m2.codex.started[-1][4] == [], (job, m2.codex.started[-1][4]))
+
+# 27) 생각: 자리에 없으면 먼저 말 걸지 않음 · 판단 기록 · 연결 실패는 한 번 다시
+m, clock, data = make(T0)
+m.cfg["late_hours"] = [0, 24]
+m.idle = lambda: 600
+m.tick()
+check("입력 없으면(잠자기·DarkWake) 먼저 말 걸지 않음", not m.codex.started)
+m.idle = lambda: 0
+clock.t += 6
+m.tick()
+check("자리에 있으면 말 걺", len(m.codex.started) == 1 and m.codex.started[0][0].get("gate", {}).get("trig") == "late", m.codex.started)
+m.tick()
+decs = [json.loads(l) for l in (data / "mind" / "decisions.jsonl").read_text().splitlines()]
+check("말한 판단 기록 (신호·확률·결과·말)", decs[-1]["outcome"] == "said" and decs[-1]["trig"] == "late" and decs[-1]["p"] == 0.9 and decs[-1]["text"] == "쉬자냥.", decs)
+m2, clock2, data2 = make(T0)
+m2.cfg["late_hours"] = [0, 24]
+m2.clef.answer = {"speak": {"noul": 0.2}, "mode": {"choice": "chat"}}
+m2.tick()
+d2 = [json.loads(l) for l in (data2 / "mind" / "decisions.jsonl").read_text().splitlines()]
+check("참은 판단도 기록", d2 and d2[-1]["outcome"] == "quiet" and d2[-1]["p"] == 0.2, d2)
+m3, clock3, data3 = make(T0)
+m3.cfg["late_hours"] = [0, 0]
+talk(m3, "안녕")
+m3.tick()
+job = m3.codex.started[-1][0]
+m3.codex.proc = None
+m3.finish({**job, "net": True}, None, 3.0)
+check("연결 실패 → 다시 하기 줄에 넣음", m3.st["queued"] and m3.st["queued"][0]["retried"], m3.st.get("queued"))
+m3.tick()
+check("다시 한 번 물음 (retried 표시)", m3.codex.started[-1][0].get("retried") is True)
+m3.codex.proc = None
+m3.finish({**m3.codex.started[-1][0], "net": True}, None, 3.0)
+said = [json.loads(l) for l in (data3 / "mind" / "out").glob("*.json") for l in [l.read_text()]] if (data3 / "mind" / "out").exists() else []
+check("두 번째도 실패하면 연결 안 된다고 말함", any("연결이 잘 안 된다냥" in o.get("text", "") for o in said), said)
+
+# 28) 주간 개선 제안: 켜야만 · 대화 이름 가림 · 자리표시 빠진 문구와 모르는 키는 버림
+m, clock, data = make(T0)
+m.cfg["late_hours"] = [0, 0]
+(data / "phrases.json").write_text(json.dumps({"phrases": {"done.claude": "{agent} ‘{name}’ 답 끝났다냥 ✅"}, "params": {"gate.normal_min": 30}}))
+(data / "notices.jsonl").write_text("".join(json.dumps({"text": f"Claude ‘비밀 프로젝트’ 컨텍스트 8{i}%다", "ts": T0 - 60 * i, "urgent": True}) + "\n" for i in range(5)))
+m.tick()
+check("꺼져 있으면 개선 제안 안 함", not any(j[0]["kind"] == "improve" for j in m.codex.started))
+(data / "mind" / "improve.on").touch(); (data / "mind" / "improve.now").touch()
+clock.t += 6
+m.tick()
+imp = next((j for j in m.codex.started if j[0]["kind"] == "improve"), None)
+check("켜고 '지금' 이면 개선 제안 시작", imp is not None and not (data / "mind" / "improve.now").exists())
+(data / "mind" / "conversation.jsonl").write_text(json.dumps({"role": "cat", "text": "비밀 이야기다냥", "ts": T0}) + "\n")
+(data / "notices.jsonl").open("a").write(json.dumps({"text": "비밀 이야기다냥", "ts": T0, "urgent": True}) + "\n")
+check("대화 답은 통계에 안 들어감", "비밀 이야기" not in M.improve_report(data, T0))
+check("보내는 통계에 대화 이름 없음", imp and "비밀 프로젝트" not in imp[1] and "‘…’" in imp[1], imp and imp[1][-400:])
+m.codex.proc = None
+m.finish({"kind": "improve"}, {"summary": "컨텍스트 경고가 잦다", "suggestions": [
+    {"kind": "phrase", "key": "done.claude", "value": "{agent} 답 끝났다냥", "why": "x"},
+    {"kind": "phrase", "key": "done.claude", "value": "{agent} ‘{name}’ 다 끝났다냥 ✅", "why": "y"},
+    {"kind": "param", "key": "gate.normal_min", "value": "45", "why": "z"},
+    {"kind": "param", "key": "없는키", "value": "1", "why": "w"},
+    {"kind": "idea", "key": "", "value": "새벽엔 조용히", "why": "v"}]}, 12.0)
+latest = json.loads((data / "mind" / "improve" / "latest.json").read_text())
+check("검증 통과한 제안만 남김", [s["value"] for s in latest["suggestions"]] == ["{agent} ‘{name}’ 다 끝났다냥 ✅", "45", "새벽엔 조용히"], latest["suggestions"])
+check("지금 값·상태 같이 저장", latest["suggestions"][1]["current"] == 30 and all(s["status"] == "new" for s in latest["suggestions"]))
+check("한 번 하면 일주일 쉼", not m.improve_due())
 
 print("\n" + ("모두 통과" if not failed else f"{failed}개 실패"))
 sys.exit(1 if failed else 0)

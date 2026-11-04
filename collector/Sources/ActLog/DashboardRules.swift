@@ -73,6 +73,31 @@ enum InboxRules {
         }
         return keys.map { Group(items: keyed[$0]!) }
     }
+
+    /// 묶음 질문들이 함께 끝나는 문구 (낱말 단위). 각 질문엔 앞부분만 보여 준다.
+    /// "10/27 02:41부터 22분 Claude에서 한 일은 어느 프로젝트?" ×n → "Claude에서 한 일은 어느 프로젝트?". 짧거나 없으면 nil
+    static func commonSuffix(_ texts: [String]) -> String? {
+        guard texts.count > 1, var common = texts.first.map({ Array($0) }) else { return nil }
+        for t in texts.dropFirst() {
+            let c = Array(t)
+            var n = 0
+            while n < common.count, n < c.count, common[common.count - 1 - n] == c[c.count - 1 - n] { n += 1 }
+            common = Array(common.suffix(n))
+        }
+        var s = String(common)
+        // 낱말 중간에서 시작하면 첫 공백 뒤부터 (질문 하나가 통째로 같으면 그대로 둔다)
+        if !texts.contains(s), let sp = s.firstIndex(of: " ") { s = String(s[s.index(after: sp)...]) }
+        s = s.trimmingCharacters(in: .whitespaces)
+        guard s.count >= 6, texts.allSatisfy({ $0.count > s.count }) else { return nil }
+        return s
+    }
+
+    /// 공통 문구를 뺀 앞부분 (없으면 전체)
+    static func stripSuffix(_ text: String, _ suffix: String?) -> String {
+        guard let suffix, text.hasSuffix(suffix) else { return text }
+        let head = String(text.dropLast(suffix.count)).trimmingCharacters(in: .whitespaces)
+        return head.isEmpty ? text : head
+    }
 }
 
 /// 고양이 알림 기록(notices.jsonl: text·ts·urgent 한 줄씩)의 순수 규칙: 읽기 · 연달아 같은 알림 접기
@@ -96,6 +121,36 @@ enum NoticeRules {
                   let text = o["text"] as? String, let ts = o["ts"] as? Double else { return nil }
             return Notice(text: text, ts: ts, urgent: o["urgent"] as? Bool ?? false)
         }
+    }
+
+    enum Category: Equatable { case context, quota, memory, battery, done, ask, todo, rest, other }
+
+    /// 아이콘·색을 고르려고 첫 줄로 대강 나눈다
+    static func category(_ text: String) -> Category {
+        let head = String(text.split(separator: "\n", maxSplits: 1).first ?? "")
+        func has(_ words: String...) -> Bool { words.contains { head.contains($0) } }
+        if has("컨텍스트") { return .context }
+        if has("한도", "⛔") { return .quota }
+        if has("메모리", "🧠") { return .memory }
+        if has("배터리", "⚡") { return .battery }
+        if has("끝났다", "✅") { return .done }
+        if has("물어볼", "확인할", "❓", "❗") { return .ask }
+        if has("할 일", "📝") { return .todo }
+        if has("기지개", "일했다", "식사", "밥", "점심", "저녁", "아침", "잠", "쉬") { return .rest }
+        return .other
+    }
+
+    /// 목록에 보일 글: 왼쪽 아이콘과 겹치는 줄 앞 이모지·끝의 ✅ 를 뗀다
+    static func plain(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+            var s = Substring(line)
+            while let c = s.first, c.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation || ($0.properties.isEmoji && $0.value > 0x2000) }) || c == " " {
+                s = s.dropFirst()
+            }
+            var out = String(s)
+            if out.hasSuffix("✅") { out = String(out.dropLast()).trimmingCharacters(in: .whitespaces) }
+            return out
+        }.joined(separator: "\n")
     }
 
     /// 경고: 급하게 알린 것 중 고양이와 나눈 대화 답(대화 기록 mind/conversation.jsonl 에 같은 글이 있는 것)은 뺀다
@@ -127,5 +182,76 @@ enum NoticeRules {
             }
         }
         return out
+    }
+}
+
+/// 고양이 판단 기록(mind/decisions.jsonl, cat_mind 가 쓴다)과 주간 개선 제안(mind/improve/latest.json)의 순수 규칙
+enum ThinkRules {
+    struct Decision: Equatable {
+        let ts: Double
+        let kind: String        // proactive · chat · improve
+        let trig: String?
+        let facts: String?
+        let p: Double?
+        let mode: String?
+        let outcome: String     // said · quiet · failed · timeout · limited · retry
+        let took: Double?
+        let text: String?
+    }
+
+    static let triggerKo = ["stuck": "막힘", "back": "돌아옴", "long_focus": "오래 쉬지 않음", "late": "늦은 밤", "drift": "딴짓",
+                            "switch": "작업 전환", "notable": "기록할 만한 순간", "curious": "오래 조용함"]
+    static let modeKo = ["chat": "가볍게", "judge": "의견", "ask": "질문", "quiet": "가만히"]
+    static let outcomeKo = ["said": "말함", "quiet": "참음", "failed": "실패", "timeout": "시간 초과", "limited": "한도", "retry": "다시 시도"]
+
+    static func parse(_ jsonl: String) -> [Decision] {
+        jsonl.split(separator: "\n").compactMap { line in
+            guard let o = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let ts = o["ts"] as? Double, let outcome = o["outcome"] as? String else { return nil }
+            return Decision(ts: ts, kind: o["kind"] as? String ?? "proactive", trig: o["trig"] as? String, facts: o["facts"] as? String,
+                            p: o["p"] as? Double, mode: o["mode"] as? String, outcome: outcome, took: o["took"] as? Double, text: o["text"] as? String)
+        }
+    }
+
+    /// 목록 제목: "돌아옴 · 가볍게 · 말함" / 사용자가 말 건 건 "말 걸어 옴 · 답함"
+    static func title(_ d: Decision) -> String {
+        if d.kind == "chat" { return "말 걸어 옴 · " + (d.outcome == "said" ? "답함" : outcomeKo[d.outcome] ?? d.outcome) }
+        let trig = d.trig.map { triggerKo[$0] ?? $0 } ?? "먼저 말 걸기"
+        return [trig, d.mode.map { modeKo[$0] ?? $0 }, outcomeKo[d.outcome] ?? d.outcome].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// 부제: 신호 내용 · 말할 확률 · 걸린 시간
+    static func subtitle(_ d: Decision) -> String {
+        [d.facts, d.p.map { String(format: "말할 확률 %.2f", $0) }, d.took.map { String(format: "%.1f초", $0) }]
+            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    struct Suggestion: Equatable {
+        let id: String
+        let kind: String        // phrase · param · idea
+        let key: String
+        let value: String
+        let current: String?
+        let why: String
+        var status: String      // new · applied · ignored
+    }
+
+    struct Improve: Equatable {
+        let ts: Double
+        let summary: String
+        var suggestions: [Suggestion]
+    }
+
+    static func parseImprove(_ data: Data) -> Improve? {
+        guard let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let ts = o["ts"] as? Double else { return nil }
+        let list: [Suggestion] = (o["suggestions"] as? [[String: Any]] ?? []).compactMap { s in
+            guard let id = s["id"] as? String, let kind = s["kind"] as? String, let value = s["value"] as? String else { return nil }
+            let cur: String? = (s["current"] as? String) ?? (s["current"] as? NSNumber).map { n in
+                n.doubleValue == n.doubleValue.rounded() ? String(Int(n.doubleValue)) : n.stringValue
+            }
+            return Suggestion(id: id, kind: kind, key: s["key"] as? String ?? "", value: value, current: cur,
+                              why: s["why"] as? String ?? "", status: s["status"] as? String ?? "new")
+        }
+        return Improve(ts: ts, summary: o["summary"] as? String ?? "", suggestions: list)
     }
 }

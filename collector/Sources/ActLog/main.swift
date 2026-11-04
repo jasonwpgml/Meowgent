@@ -74,6 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         Log.url = dataDir.appendingPathComponent("actlog.log")
         Privacy.config = Config.load(dir: dataDir)
+        PhraseTable.current = PhraseTable.load(dir: dataDir)
         Log.write("Meowgent \(AppDelegate.appVersion) 시작, DB: \(store.path.path)")
         // 활동 기록은 옵트인. 처음 켤 때 묻고, 이미 기록이 있던 설치는 켠 상태를 유지한다.
         if UserDefaults.standard.object(forKey: "recordingEnabled") == nil {
@@ -191,10 +192,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.launcher.addMenuItems(to: m)
         }
         shortcuts.show = { [weak p] h in p?.keyHint(h.keys, h.title) ?? false }
-        quota.notify = { [weak p] n in p?.notify(n.text, urgent: n.urgent, validUntil: n.validUntil) }
-        resources.notify = { [weak p] n in p?.notify(n.text, urgent: n.urgent, validUntil: n.validUntil, detail: n.detail) }
+        // 숫자만 다른 같은 알림은 잠깐 다시 말하지 않는다 (NoticeBatch.Gate). 고양이 대화 답은 거르지 않는다
+        quota.notify = { [weak self, weak p] n in
+            if self?.gate(n.text, urgent: n.urgent) == true { p?.notify(n.text, urgent: n.urgent, validUntil: n.validUntil) }
+        }
+        resources.notify = { [weak self, weak p] n in
+            if self?.gate(n.text, urgent: n.urgent) == true { p?.notify(n.text, urgent: n.urgent, validUntil: n.validUntil, detail: n.detail) }
+        }
         quota.codexFallback = { [weak self] in self?.agents.codexWindows ?? [] }
-        agents.notify = { [weak p] n in p?.notify(n.text, urgent: n.urgent) }
+        agents.notify = { [weak self, weak p] n in
+            if self?.gate(n.text, urgent: n.urgent) == true { p?.notify(n.text, urgent: n.urgent) }
+        }
         mind.say = { [weak p] l in p?.notify(l.text, urgent: l.urgent) }
         mind.trick = { [weak p] name in p?.trick(name) }
         PetController.tirednessSource = { [weak self] in self?.mind.isOff == false ? self?.mind.tiredness ?? 0 : 0 }
@@ -206,6 +214,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         resources.start()
         p.start()
         pet = p
+    }
+
+    private var noticeGate = NoticeBatch.Gate()
+    private func gate(_ text: String, urgent: Bool) -> Bool {
+        noticeGate.allow(text, urgent: urgent, now: Date().timeIntervalSince1970)
     }
 
     @objc func putToysAway() { pet?.trick("toy-off") }

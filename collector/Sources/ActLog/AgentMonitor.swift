@@ -13,7 +13,14 @@ final class AgentMonitor {
     private let home = FileManager.default.homeDirectoryForCurrentUser
     private let queue = DispatchQueue(label: "meowgent.agents", qos: .utility)
     private var timer: Timer?
-    private var warnedContext: [String: Int] = [:]        // 세션별로 이미 알린 단계 (50, 80)
+    /// 세션별로 이미 알린 단계 (50·80·90)와 그 시각. 다시 켜도 같은 경고를 반복하지 않게 UserDefaults 에 남긴다 (7일 지나면 버림)
+    private var warnedContext: [String: Warned] = AgentMonitor.loadWarned()
+    private struct Warned: Codable { var step: Int; var at: Double }
+    /// 짧은 사이에 끝난 대화들을 모았다가 한 마디로 (NoticeBatch.doneLine)
+    private var pendingDone: [NoticeBatch.Done] = []
+    private var doneFlush: DispatchWorkItem?
+    /// 끝남을 모으는 시간 (phrases.json 의 done.window_s)
+    static var doneWindow: TimeInterval { PhraseTable.current.param("done.window_s") }
     private var lastDone: [String: String] = [:]          // 세션별 마지막 "끝남" 표시 (중복 방지)
     private(set) var summary = ""                         // 메뉴·말풍선용 한 줄 요약
     private(set) var codexWindows: [Quota.Window] = []    // 세션 기록의 Codex 한도 (5시간·주간)
@@ -38,6 +45,24 @@ final class AgentMonitor {
 
     private func send(_ text: String, urgent: Bool = false) {
         DispatchQueue.main.async { [weak self] in self?.notify?(Notice(text: text, urgent: urgent)) }
+    }
+
+    /// 끝남은 바로 말하지 않고 doneWindow 동안 모은다 (그 사이 더 끝나면 같이)
+    private func queueDone(_ d: NoticeBatch.Done) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.pendingDone.append(d)
+            guard self.doneFlush == nil else { return }
+            let w = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                let items = self.pendingDone
+                self.pendingDone = []
+                self.doneFlush = nil
+                if let line = NoticeBatch.doneLine(items) { self.notify?(Notice(text: line, urgent: false)) }
+            }
+            self.doneFlush = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.doneWindow, execute: w)
+        }
     }
 
     // MARK: Codex  (~/.codex/sessions/연/월/일/rollout-*.jsonl)
@@ -105,7 +130,7 @@ final class AgentMonitor {
                 lastDone["codex:" + id] = d
                 let inCodex = front.map { $0.contains("openai") || $0.contains("codex") } ?? false
                 let fresh = Date().timeIntervalSince(mod) < 30
-                if !first && !inCodex && fresh { send("Codex ‘\(name)’ 일 끝났다. 가 봐 ✅") }
+                if !first && !inCodex && fresh { queueDone(.init(agent: "Codex", name: name)) }
             }
             if let c = st.ctxPct, lines.count < 3 { lines.append("Codex ‘\(name)’: 컨텍스트 \(c)%") }
         }
@@ -182,7 +207,7 @@ final class AgentMonitor {
                 lastDone["claude:" + id] = d
                 let inAgent = front.map { $0.contains("anthropic") || $0.contains("Terminal") || $0.contains("iterm") || $0.contains("ghostty") } ?? false
                 let mod = (try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                if !first && !inAgent && Date().timeIntervalSince(mod) < 30 { send("Claude ‘\(name)’ 답 끝났다. 읽어 봐 ✅") }
+                if !first && !inAgent && Date().timeIntervalSince(mod) < 30 { queueDone(.init(agent: "Claude", name: name)) }
             }
         }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
@@ -221,13 +246,27 @@ final class AgentMonitor {
     }
 
     private func warnContext(session: String, agent: String, pct: Int) {
-        let step = pct >= 80 ? 80 : (pct >= 50 ? 50 : 0)
-        guard step > (warnedContext[session] ?? 0) else { return }
+        let step = NoticeBatch.contextStep(pct)
+        // 정리(compact)해서 크게 줄었으면 처음부터 다시 센다
+        if pct < 40, warnedContext[session] != nil { warnedContext[session] = nil; saveWarned() }
+        guard step > (warnedContext[session]?.step ?? 0) else { return }
         let first = warnedContext[session] == nil
-        warnedContext[session] = step
-        if first && step == 50 { return }   // 앱을 켰을 때 이미 절반 넘은 대화들까지 한꺼번에 알리지 않는다 (80% 넘은 건 알림)
-        send(step >= 80 ? "\(agent) 컨텍스트 \(pct)%다. 정리(compact)하든지 새 세션으로 넘겨"
-                        : "\(agent) 컨텍스트 절반 넘었다 (\(pct)%)", urgent: step >= 80)
+        warnedContext[session] = Warned(step: step, at: Date().timeIntervalSince1970)
+        saveWarned()
+        if first && step == 50 { return }   // 처음 본 대화가 이미 절반 넘었으면 조용히 (80% 넘은 건 알림)
+        send(NoticeBatch.contextLine(agent: agent, pct: pct, step: step), urgent: step >= 80)
+    }
+
+    private static func loadWarned() -> [String: Warned] {
+        guard let d = UserDefaults.standard.data(forKey: "agentContextWarned"),
+              let w = try? JSONDecoder().decode([String: Warned].self, from: d) else { return [:] }
+        let cut = Date().timeIntervalSince1970 - 7 * 86400
+        return w.filter { $0.value.at > cut }
+    }
+
+    /// 감시 큐에서 부른다
+    private func saveWarned() {
+        if let d = try? JSONEncoder().encode(warnedContext) { UserDefaults.standard.set(d, forKey: "agentContextWarned") }
     }
 
     // MARK: 파일 도구

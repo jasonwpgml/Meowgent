@@ -182,7 +182,10 @@ final class MindChat: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         if voice.listening { s = "듣는 중… 다 말하면 ■ 또는 단축키를 떼라냥" }
         else if let note { s = note }
         else if !bridge.isAlive { s = "고양이 머리(cat_mind)가 안 돌고 있다냥" }
-        else if bridge.isThinking || !pending.isEmpty { s = "생각 중이다냥 ···" }
+        else if bridge.isThinking || !pending.isEmpty {
+            let secs = bridge.thinkingSince.map { Int(Date().timeIntervalSince($0)) } ?? 0
+            s = secs >= 3 ? "생각 중이다냥 · \(secs)초" : "생각 중이다냥 ···"
+        }
         else { s = bridge.quotaLine ?? "옆에서 쉬는 중이다냥" }
         status.stringValue = s
     }

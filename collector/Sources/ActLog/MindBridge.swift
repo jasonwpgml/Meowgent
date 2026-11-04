@@ -55,6 +55,11 @@ final class MindBridge: NSObject {
     /// cat_mind 가 Codex 답을 기다리는 중
     var isThinking: Bool { FileManager.default.fileExists(atPath: dir.appendingPathComponent("thinking").path) }
 
+    /// 생각을 시작한 시각 (thinking 파일을 만든 때). 대화창에 몇 초째인지 보여 준다
+    var thinkingSince: Date? {
+        (try? FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent("thinking").path))?[.modificationDate] as? Date
+    }
+
     func start() {
         let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.poll() }
         RunLoop.main.add(t, forMode: .common)

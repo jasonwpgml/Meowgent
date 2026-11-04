@@ -7,6 +7,13 @@ PLIST="$HOME/Library/LaunchAgents/com.jason.actlog.brain.plist"
 LABEL="com.jason.actlog.brain"
 PY="$(command -v python3)"
 
+# launchd 에 다시 올린다. 내리는 게 끝나기 전에 올리면 "Bootstrap failed: 5" 로 실패하고 서비스가 꺼진 채 남아서, 다 내려갈 때까지 기다린다
+reload_agent() {
+    launchctl bootout "gui/$(id -u)/$1" 2>/dev/null || true
+    for _ in $(seq 20); do launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1 || break; sleep 0.25; done
+    launchctl bootstrap "gui/$(id -u)" "$2"
+}
+
 mkdir -p "$DEST"
 cp actlog_brain.py "$DEST/actlog_brain.py"
 
@@ -29,8 +36,7 @@ cat > "$PLIST" <<PL
 </plist>
 PL
 
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+reload_agent "$LABEL" "$PLIST"
 echo "설치됨: $DEST/actlog_brain.py (launchd: $LABEL)"
 
 # 말하는 고양이 (cat_mind). Codex 계정은 ./mind_setup.sh 로 따로 로그인한다
@@ -59,6 +65,5 @@ cat > "$MIND_PLIST" <<PL
 </dict>
 </plist>
 PL
-launchctl bootout "gui/$(id -u)/$MIND_LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$MIND_PLIST"
+reload_agent "$MIND_LABEL" "$MIND_PLIST"
 echo "설치됨: $DEST/cat_mind.py (launchd: $MIND_LABEL) — 끄기: 고양이 메뉴 '🧠 말하는 고양이'"
