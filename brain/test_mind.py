@@ -598,9 +598,19 @@ for u, said in [("https://www.youtube.com/", "유튜브 열어"), ("https://musi
     opened.append(len(acts()))
     for f in acts(): f.unlink()
 check("이름으로 부른 사이트(유튜브)는 바로", opened == [1, 1], opened)
-for bad in ("https://youtube.com.evil.com/", "https://evilyoutube.com/", "https://google.com/"):
-    m.run_actions(url(bad), "유튜브 열어")
-check("이름이 가리키는 도메인 밖은 묻는다", not acts(), [f.read_text() for f in acts()])
+for bad, said in [("https://youtube.com.evil.com/", "유튜브 열어"), ("https://evilyoutube.com/", "유튜브 열어"), ("https://google.com/", "유튜브 열어"),
+                  ("https://sites.google.com/view/evil", "구글 열어"), ("https://www.notion.so/", "notional value"),
+                  ("https://www.google.com/url?q=https://evil.example/", "구글 열어"), ("https://www.youtube.com/redirect?q=evil.example", "유튜브 열어"),
+                  ("https://www.google.com/url?q=https%3A%2F%2Fevil.example", "google.com 열어"), ("https://github.com//evil.example", "github.com 열어")]:
+    m.run_actions(url(bad), said)
+check("이름이 가리키는 호스트 밖·넘겨주기 주소는 묻는다", not acts(), [f.read_text() for f in acts()])
+opened = []
+for u, said in [("https://m.youtube.com/results?search_query=고양이", "유튜브에서 고양이 찾아"), ("https://www.google.com/search?q=날씨", "구글에서 날씨"),
+                ("https://ko.wikipedia.org/wiki/고양이", "위키백과 고양이")]:
+    m.run_actions(url(u), said)
+    opened.append(len(acts()))
+    for f in acts(): f.unlink()
+check("검색·문서 주소는 바로", opened == [1, 1, 1], opened)
 cmd = lambda c: [{"tool": "command", "arg": c, "detail": "", "agent": "auto"}]
 m.run_actions(cmd("pause60"), "대시보드 열어")
 check("끄라는 말 없이 기록 멈추기는 묻는다", not acts() and any("1시간 멈추기" in f.read_text() for f in (data / "inbox").glob("mind-act-*.json")))

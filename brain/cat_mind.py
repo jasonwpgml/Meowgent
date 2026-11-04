@@ -146,24 +146,26 @@ YES_ACT, NO_ACT = "해", "하지 마"
 # 다르게 읽는 글자는 아예 안 받는다)
 URL_RE = re.compile(r"https://([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?::\d{1,5})?(?:[/?#][^\s\\]*)?", re.I)
 HOST_IN_TEXT = re.compile(r"(?<![a-z0-9.-])((?:[a-z0-9-]+\.)+[a-z]{2,})(?![a-z0-9-])", re.I)
-# 도메인 대신 이름으로 부르는 사이트 ("유튜브 열어"). 이름이 말에 있으면 이 도메인(과 그 하위 주소)은 바로 연다.
-# 도메인은 여기 적힌 것뿐이라 남의 글이 고를 수 없다. 흔한 낱말과 겹치는 이름(다음 등)은 넣지 않는다
+# 도메인 대신 이름으로 부르는 사이트 ("유튜브 열어"). 이름이 말에 있으면 여기 적힌 호스트(앞의 www.·m. 은 무시)만 바로 연다.
+# 하위 주소는 따로 적은 것만 (sites.google.com 처럼 남이 꾸민 페이지가 있는 하위 주소는 빼려고). 흔한 낱말과 겹치는 이름(다음 등)은 넣지 않는다
 SITE_NAMES = {
-    ("유튜브", "youtube"): ("youtube.com", "youtu.be"),
+    ("유튜브", "youtube"): ("youtube.com", "music.youtube.com", "youtu.be"),
     ("구글", "google"): ("google.com", "google.co.kr"),
     ("지메일", "gmail"): ("mail.google.com",),
-    ("네이버", "naver"): ("naver.com",),
+    ("네이버", "naver"): ("naver.com", "search.naver.com"),
     ("깃허브", "github"): ("github.com",),
     ("넷플릭스", "netflix"): ("netflix.com",),
     ("쿠팡", "coupang"): ("coupang.com",),
     ("나무위키", "namuwiki"): ("namu.wiki",),
-    ("위키백과", "위키피디아", "wikipedia"): ("wikipedia.org",),
+    ("위키백과", "위키피디아", "wikipedia"): ("ko.wikipedia.org", "en.wikipedia.org"),
     ("챗지피티", "chatgpt"): ("chatgpt.com",),
     ("노션", "notion"): ("notion.so", "notion.com"),
     ("인스타", "instagram"): ("instagram.com",),
     ("트위터", "twitter"): ("x.com", "twitter.com"),
     ("레딧", "reddit"): ("reddit.com",),
 }
+# 바로 여는 주소라도 경로·쿼리에 다른 주소를 품었거나 넘겨주기(redirect) 경로면 묻는다 (google.com/url?q=… 같은 우회)
+BOUNCE_RE = re.compile(r"https?|%2f|%3a|//|redirect|/url\b|/link\b|/out\b|/away\b|(?:[a-z0-9-]+\.)+[a-z]{2,}", re.I)
 
 SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -985,17 +987,27 @@ class Mind:
         return re.sub(r"^\(고양이가 물은 '.*'에 고른 답\) ", "", str(request or ""), flags=re.S).lower()
 
     @staticmethod
+    def said_word(word, said):
+        """영어 이름은 낱말 전체로만 (notional 속 notion 은 아님). 한글 이름은 조사가 붙으니 글자 포함으로"""
+        return re.search(rf"(?<![a-z0-9]){re.escape(word)}(?![a-z0-9])", said) is not None if word.isascii() else word in said
+
+    @staticmethod
     def url_host(arg):
         m = URL_RE.fullmatch(arg)
         return m.group(1).lower() if m else None
 
     @classmethod
     def needs_confirm(cls, tool, arg, said):
-        if tool == "open_url":   # 사용자 말 속 도메인(또는 SITE_NAMES 이름)과 호스트 전체가 같거나, 그 하위 주소일 때만 바로 연다
-            host = (cls.url_host(arg) or "").removeprefix("www.")
+        if tool == "open_url":   # 넘겨주기 주소가 아니고, 사용자 말 속 도메인(이나 그 하위 주소) 또는 말한 SITE_NAMES 호스트일 때만 바로 연다
+            m = URL_RE.fullmatch(arg)
+            if not m or BOUNCE_RE.search(arg[m.end(1):]):
+                return True
+            host = m.group(1).lower().removeprefix("www.")
             names = {h.lower().removeprefix("www.") for h in HOST_IN_TEXT.findall(said)}
-            names |= {d for words, doms in SITE_NAMES.items() if any(w in said for w in words) for d in doms}
-            return not host or not any(host == n or host.endswith("." + n) for n in names)
+            if any(host == n or host.endswith("." + n) for n in names):
+                return False
+            sites = {d for words, doms in SITE_NAMES.items() if any(cls.said_word(w, said) for w in words) for d in doms}
+            return host.removeprefix("m.") not in sites
         return tool == "command" and arg in CONFIRM_CMDS and not any(w in said for w in OFF_WORDS)
 
     def queue_act(self, tool, arg, detail, n):
