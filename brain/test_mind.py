@@ -582,6 +582,16 @@ check("해 → 그때 연다", len(acts()) == 1 and json.loads(acts()[0].read_te
 for f in acts(): f.unlink()
 m.run_actions(url("https://evil.example/x"), "(고양이가 물은 'evil.example 열까?'에 고른 답) 응")
 check("되물은 질문 글(고양이가 쓴 글)은 근거로 안 친다", not acts())
+for bad, said in [("https://hub.com/x", "github.com 열어"), ("https://evil.com\\@github.com/", "github.com 열어"),
+                  ("https://github.com@evil.com/", "github.com 열어"), ("https://github.com.evil.com/", "github.com 열어"),
+                  ("https://evilgithub.com/", "github.com 열어")]:
+    m.run_actions(url(bad), said)
+check("호스트 전체가 같아야 바로 연다 (글자 일부·@·\\ 우회 안 됨)", not acts(), [f.read_text() for f in acts()])
+check("열 수 있는 주소 모양", M.Mind.url_host("https://Docs.GitHub.com:443/a?b#c") == "docs.github.com" and M.Mind.url_host("https://a.com\\@b.com") is None
+      and M.Mind.url_host("https://u@b.com/") is None and M.Mind.url_host("http://b.com") is None)
+m.run_actions(url("https://docs.github.com/x"), "github.com 문서 열어")
+check("말한 도메인의 하위 주소는 바로", len(acts()) == 1)
+for f in acts(): f.unlink()
 cmd = lambda c: [{"tool": "command", "arg": c, "detail": "", "agent": "auto"}]
 m.run_actions(cmd("pause60"), "대시보드 열어")
 check("끄라는 말 없이 기록 멈추기는 묻는다", not acts() and any("1시간 멈추기" in f.read_text() for f in (data / "inbox").glob("mind-act-*.json")))

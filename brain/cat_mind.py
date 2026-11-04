@@ -24,7 +24,6 @@ import subprocess
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -143,6 +142,10 @@ MERGE, KEEP, DISCARD = "합치기", "그대로 두기", "버리기"
 CONFIRM_CMDS = {"pause15", "pause60", "pet_toggle"}
 OFF_WORDS = ("멈", "쉬", "꺼", "끄", "숨", "중지", "그만", "pause", "stop", "hide")
 YES_ACT, NO_ACT = "해", "하지 마"
+# 열어도 되는 주소 모양: https://호스트[:포트][/?#…]. 호스트 칸엔 영문·숫자·.-만 (@ 사용자 정보, \ 같은 브라우저와 파이썬이
+# 다르게 읽는 글자는 아예 안 받는다)
+URL_RE = re.compile(r"https://([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?::\d{1,5})?(?:[/?#][^\s\\]*)?", re.I)
+HOST_IN_TEXT = re.compile(r"(?<![a-z0-9.-])((?:[a-z0-9-]+\.)+[a-z]{2,})(?![a-z0-9-])", re.I)
 
 SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -964,10 +967,16 @@ class Mind:
         return re.sub(r"^\(고양이가 물은 '.*'에 고른 답\) ", "", str(request or ""), flags=re.S).lower()
 
     @staticmethod
-    def needs_confirm(tool, arg, said):
-        if tool == "open_url":
-            host = (urllib.parse.urlparse(arg).hostname or "").lower()
-            return not host or host.removeprefix("www.") not in said
+    def url_host(arg):
+        m = URL_RE.fullmatch(arg)
+        return m.group(1).lower() if m else None
+
+    @classmethod
+    def needs_confirm(cls, tool, arg, said):
+        if tool == "open_url":   # 사용자 말 속 도메인과 호스트 전체가 같거나, 그 도메인의 하위 주소일 때만 바로 연다
+            host = (cls.url_host(arg) or "").removeprefix("www.")
+            names = {h.lower().removeprefix("www.") for h in HOST_IN_TEXT.findall(said)}
+            return not host or not any(host == n or host.endswith("." + n) for n in names)
         return tool == "command" and arg in CONFIRM_CMDS and not any(w in said for w in OFF_WORDS)
 
     def queue_act(self, tool, arg, detail, n):
@@ -998,7 +1007,7 @@ class Mind:
                     done.append(tool)
                 continue
             ok = {"open_app": 0 < len(arg) <= 60 and "/" not in arg,
-                  "open_url": arg.startswith("https://") and " " not in arg and len(arg) <= 500,
+                  "open_url": len(arg) <= 500 and self.url_host(arg) is not None,
                   "command": arg in cmds,
                   "timer": arg.replace(".", "", 1).isdigit() and 0 < float(arg) <= 24 * 60}[tool]
             if not ok:
