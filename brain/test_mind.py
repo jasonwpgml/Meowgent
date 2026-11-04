@@ -592,6 +592,15 @@ check("열 수 있는 주소 모양", M.Mind.url_host("https://Docs.GitHub.com:4
 m.run_actions(url("https://docs.github.com/x"), "github.com 문서 열어")
 check("말한 도메인의 하위 주소는 바로", len(acts()) == 1)
 for f in acts(): f.unlink()
+opened = []
+for u, said in [("https://www.youtube.com/", "유튜브 열어"), ("https://music.youtube.com/", "YouTube 뮤직 틀어")]:
+    m.run_actions(url(u), said)
+    opened.append(len(acts()))
+    for f in acts(): f.unlink()
+check("이름으로 부른 사이트(유튜브)는 바로", opened == [1, 1], opened)
+for bad in ("https://youtube.com.evil.com/", "https://evilyoutube.com/", "https://google.com/"):
+    m.run_actions(url(bad), "유튜브 열어")
+check("이름이 가리키는 도메인 밖은 묻는다", not acts(), [f.read_text() for f in acts()])
 cmd = lambda c: [{"tool": "command", "arg": c, "detail": "", "agent": "auto"}]
 m.run_actions(cmd("pause60"), "대시보드 열어")
 check("끄라는 말 없이 기록 멈추기는 묻는다", not acts() and any("1시간 멈추기" in f.read_text() for f in (data / "inbox").glob("mind-act-*.json")))
