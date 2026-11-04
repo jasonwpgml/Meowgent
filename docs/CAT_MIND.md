@@ -265,13 +265,13 @@ python3 -I brain/test_mind.py
 
 ### 시키면 하기 (`actions`)
 
-cat_mind가 검사하고, 앱의 정해진 코드만 실행한다. 결과는 `mind/act/done/`으로 돌아와 대화 기록에 "(한 일) …"로 남는다(다음 답이 무엇을 했는지 안다).
+cat_mind가 검사하고, 앱의 정해진 코드만 실행한다. 고양이 답은 창 제목처럼 남이 쓴 글을 보고 나오므로, 남의 글이 시킬 수 있는 위험한 일(낯선 주소 열기, 기록 끄기)은 사용자가 직접 한 말을 근거로만 바로 한다. 되물은 질문에 버튼으로 답한 경우 질문 글(고양이가 쓴 글)은 근거로 치지 않는다. 결과는 `mind/act/done/`으로 돌아와 대화 기록에 "(한 일) …"로 남는다(다음 답이 무엇을 했는지 안다).
 
 | tool | 실행 | 검사 |
 |---|---|---|
 | `open_app` | 앱 목록(`AppIndex`)에서 Finder 이름·파일 이름이 같은 앱, 없으면 앞이 같은 앱 | 60자 이하, `/` 없음 |
-| `open_url` | 기본 브라우저 | `https://`만 |
-| `command` | 앱이 `mind/commands.json`에 남긴 기능 (대시보드·탭, 런처, 클립보드, 리소스, 기록 멈추기·다시, 고양이 숨기기·재주 등) | 목록에 있는 id만. 종료·권한·삭제는 목록에 넣지 않았다 |
+| `open_url` | 기본 브라우저 | `https://`만. 사용자가 한 말에 그 주소(호스트)가 없으면 "이거 할까냥?"을 먼저 묻는다 |
+| `command` | 앱이 `mind/commands.json`에 남긴 기능 (대시보드·탭, 런처, 클립보드, 리소스, 기록 멈추기·다시, 고양이 숨기기·재주 등) | 목록에 있는 id만. 종료·권한·삭제는 목록에 넣지 않았다. 기록 멈추기·고양이 숨기기는 말에 "멈·쉬·꺼·숨…"이 없으면 먼저 묻는다 |
 | `timer` | N분 뒤 말풍선 | 0~1440분. 앱을 끄면 사라진다 |
 | `todo` | `inbox/mind-todo-*.json` 확인할 일 (얼굴 옆 ! · 대시보드) | 비어 있지 않음 |
 | `code` | 아래 코딩 작업 | 늘 먼저 묻는다 |
@@ -288,10 +288,17 @@ cat_mind가 검사하고, 앱의 정해진 코드만 실행한다. 결과는 `mi
 | Cursor | `cursor-agent -p --trust --force --workspace <worktree>` |
 | Grok | `grok -p … --always-approve --cwd <worktree>` |
 
-   - **샌드박스**: Codex는 자체 `workspace-write`. Claude Code·Cursor·Grok은 자동 승인으로 돌아서 `sandbox-exec`로 감싸 쓰기를 worktree·그 git 폴더(`.git/worktrees/<이름>`)·도구 자기 설정(`~/.claude*`·`~/.cursor`·`~/.grok`)·임시 폴더·`~/Library/Caches`로 막는다. 읽기와 인터넷(모델 API)은 막지 않는다. 확인 질문의 설명에 맡길 일 전체를 보여 준다. 2026-11-04 실측: 샌드박스 안에서 바깥 쓰기는 "Operation not permitted", 세 도구 모두 작은 작업을 정상으로 끝냈다.
+   - **샌드박스**: Codex는 자체 `workspace-write`. Claude Code·Cursor·Grok은 자동 승인으로 돌아서 `sandbox-exec`로 감싼다.
+     - 쓰기: worktree(그 안의 `.git` 연결 파일은 빼고)·임시 폴더·`~/Library/Caches`·도구가 대화 기록을 남기는 폴더(Cursor `~/.cursor/projects`·`chats`, Grok `~/.grok/sessions`·`logs`, Claude는 없음)만. 저장소 `.git`(hook·설정), `~/.gitconfig`, 도구 설정·hook·플러그인·스킬·실행 파일은 못 쓴다. 밖에서 다시 돌 때 실행되는 곳이라서다.
+     - 읽기: `~/.ssh`·`~/.aws`·`~/.gnupg`·`~/.config/gh`·`~/.codex*` 같은 키 폴더와 Meowgent 데이터 폴더(활동 기록·대화)는 막는다. 데이터 폴더 안의 worktree와 그리로 가는 상위 폴더 목록만 연다. 저장소 코드와 나머지 파일 읽기, 인터넷(모델 API)은 막지 않는다. 키체인도 막지 않는다(도구 로그인에 쓴다).
+     - 규칙 순서: 뒤에 온 같은 종류 규칙이 이긴다. `file-read-data`로 막은 것은 `file-read-data`로만 풀린다. 경로는 실제 경로로 풀어 쓴다(`/var` → `/private/var`).
+   - **커밋 단계**(샌드박스 밖): 시작 때 기록한 git 폴더를 `GIT_DIR`·`GIT_WORK_TREE`로 못 박고, `core.hooksPath=/dev/null`·`core.fsmonitor=false`·`GIT_CONFIG_NOSYSTEM`·`--no-verify`로 돌린다. worktree의 `.git` 연결 파일이 시작 때와 다르면 커밋하지 않는다.
+   - 확인 질문의 설명에 맡길 일 전체(1500자까지)를 보여 주고, 에이전트에게도 같은 글을 넘긴다.
+   - 합치기는 사용자가 고른다. 합친 코드(빌드 스크립트·`.envrc` 등)는 그 뒤 사용자 환경에서 돌 수 있으니, 합치기 전에 브랜치를 보는 게 좋다.
+   - 2026-11-04 실측: 샌드박스 안에서 `.git` 연결 파일·저장소 hook·worktree git 폴더·`~/.gitconfig`·`~/.claude`·`~/.grok` 설정 쓰기, `~/.ssh`·데이터 폴더 읽기가 모두 "Operation not permitted". 작업 폴더 안의 `git status`·읽기·쓰기는 된다. Claude Code는 홈에 아무것도 못 써도 작업을 끝냈다. Cursor는 `projects`, Grok은 `sessions`를 못 쓰면 시작을 못 해서 그 폴더만 열었다. 이 프로필로 진짜 세 도구가 동시에 파일 하나씩 만들어 커밋까지 끝냈고, 저장소에 심어 둔 pre-commit hook은 돌지 않았다.
 3. 에이전트에겐 커밋·푸시·브랜치 바꾸기·되돌리기 어려운 일을 하지 말고, 끝에 "바꾼 것 / 확인한 것 / 확인 못 한 것"을 쓰라고 한다. 끝나면 cat_mind가 worktree에서 커밋하고 말풍선으로 요약한다.
 4. 바뀐 파일이 있으면 "합치기 · 그대로 두기 · 버리기"를 묻는다. 합치기는 저장소가 시작 때 브랜치에 있고 커밋 안 한 변경이 없을 때만 `--no-ff`로 합친다. 충돌이면 되돌리고 브랜치를 남긴다. **푸시는 하지 않는다.**
-5. 대시보드 "작업" 탭(⌘5): 하는 중·끝난 작업, 요약, 브랜치, 폴더 열기·기록 보기·멈추기(`mind/tasks/<id>/cancel`). 대화창 상태 줄에 "🛠 Claude Code · Meowgent 작업 중 · 3분째".
+5. 대시보드 "작업" 탭(⌘6): 하는 중·끝난 작업, 요약, 브랜치, 폴더 열기·기록 보기·멈추기(`mind/tasks/<id>/cancel`). 대화창 상태 줄에 "🛠 Claude Code · Meowgent 작업 중 · 3분째".
 
 설정(`mind.json`): `code_repos`(이름→경로, 비면 `install.sh`가 남긴 이 저장소 하나), `code_agents`(보기 순서), `code_max_running`(2), `code_timeout_s`(3600).
 

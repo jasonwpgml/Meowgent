@@ -24,6 +24,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -137,6 +138,11 @@ ACTIONS = {
 APP_ACTIONS = {"open_app", "open_url", "command", "timer", "todo"}
 CODE_NO = "안 돼"
 MERGE, KEEP, DISCARD = "합치기", "그대로 두기", "버리기"
+# 고양이 답(모델 출력)은 창 제목처럼 남이 쓴 글을 보고 나온다. 사용자가 한 말에 근거가 없으면 먼저 묻는 것:
+# 웹 주소(말에 그 주소가 없을 때), 기록·고양이를 끄는 명령(말에 끄라는 말이 없을 때)
+CONFIRM_CMDS = {"pause15", "pause60", "pet_toggle"}
+OFF_WORDS = ("멈", "쉬", "꺼", "끄", "숨", "중지", "그만", "pause", "stop", "hide")
+YES_ACT, NO_ACT = "해", "하지 마"
 
 SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -834,7 +840,7 @@ class Mind:
 
     def open_asks(self):
         inbox = self.data / "inbox"
-        return sum(not re.match(r"mind-(perm|rule|chat|code|todo)-", f.name) for f in inbox.glob("mind-*.json")) if inbox.exists() else 0
+        return sum(not re.match(r"mind-(perm|rule|chat|code|todo|act)-", f.name) for f in inbox.glob("mind-*.json")) if inbox.exists() else 0
 
     def allow_always(self, tool):
         self.cfg["allow"] = sorted(set(self.cfg["allow"]) | {tool})
@@ -876,6 +882,13 @@ class Mind:
             if isinstance(o.get("codedone"), dict):
                 self.answer_codedone(o["codedone"], ans)
                 continue
+            if isinstance(o.get("act"), dict):
+                a = o["act"]
+                self.journal("user", f"({ACTIONS.get(a.get('tool'), '?').split(' (')[0]} '{clip(a.get('arg'), 60)}' 할까에) "
+                             + (str(ans) if ans else "답 안 하고 넘김"), kind="answer")
+                if ans == YES_ACT and a.get("tool") in APP_ACTIONS - {"todo"}:
+                    self.queue_act(str(a["tool"]), str(a.get("arg", "")), str(a.get("detail", "")), 0)
+                continue
             self.journal("user", f"(고양이 질문 '{clip(o.get('text'), 60)}'에) " + (str(ans) if ans else "답 안 하고 넘김"), kind="answer")
             # 대화 중 되물은 질문: 버튼으로 답하면 그 답으로 이어서 대답한다 (대화창에 글로 답했으면 그 말에 이미 답한다)
             if o.get("followup") and ans and o.get("via") != "chat":
@@ -884,6 +897,7 @@ class Mind:
 
     # 코딩 작업 (code_tasks.py)
     def ask_code(self, repo, task, request, agent):
+        task = clip(task, 1500)   # 확인 창에 보인 글과 맡기는 글이 같아야 한다
         agents = self.tasks.agents()
         if not agents:
             self.emit("코딩 도구(Claude Code·Codex·Cursor·Grok)가 하나도 안 보인다냥.", urgent=True)
@@ -892,7 +906,7 @@ class Mind:
             agents = [agent] + [a for a in agents if a != agent]
         labels = [code_tasks.AGENTS[a] for a in agents]
         self.post_ask(f"🛠 {repo}에서 이 일을 맡길까냥?\n「{clip(task, 160)}」", labels + [CODE_NO], "code", 86400,
-                      detail=f"맡길 일 전체: {clip(task, 1500)}\n\n원래 말: {clip(request, 300)}\n"
+                      detail=f"맡길 일 전체: {task}\n\n원래 말: {clip(request, 300)}\n"
                              "새 브랜치(worktree)에서 하고, 끝나면 합칠지 묻는다. Codex 는 자체 샌드박스, 나머지는 macOS 샌드박스에서 "
                              "worktree 밖 파일을 못 고친다 (읽기와 인터넷은 된다).",
                       code={"repo": repo, "task": task, "request": request})
@@ -944,7 +958,25 @@ class Mind:
         """앱이 남긴 명령 목록 (mind/commands.json: [{id, title}])"""
         return {str(c["id"]): str(c.get("title", c["id"])) for c in read_json(self.dir / "commands.json", []) if isinstance(c, dict) and c.get("id")}
 
+    @staticmethod
+    def said_by_user(request):
+        """request 중 사용자가 직접 한 말. 되물은 질문에 버튼으로 답한 경우 앞의 질문(고양이가 쓴 글)은 뺀다"""
+        return re.sub(r"^\(고양이가 물은 '.*'에 고른 답\) ", "", str(request or ""), flags=re.S).lower()
+
+    @staticmethod
+    def needs_confirm(tool, arg, said):
+        if tool == "open_url":
+            host = (urllib.parse.urlparse(arg).hostname or "").lower()
+            return not host or host.removeprefix("www.") not in said
+        return tool == "command" and arg in CONFIRM_CMDS and not any(w in said for w in OFF_WORDS)
+
+    def queue_act(self, tool, arg, detail, n):
+        ts = self.now()
+        write_private(self.dir / "act" / f"{int(ts * 1000)}-{n}.json",
+                      json.dumps({"tool": tool, "arg": arg, "detail": clip(detail, 200), "ts": ts}, ensure_ascii=False))
+
     def run_actions(self, actions, request):
+        said = self.said_by_user(request)
         cmds = self.commands()
         repos = self.tasks.repos()
         done = []
@@ -972,9 +1004,14 @@ class Mind:
             if not ok:
                 log(f"할 일 버림: {tool} {clip(arg, 60)}")
                 continue
-            ts = self.now()
-            write_private(self.dir / "act" / f"{int(ts * 1000)}-{n}.json",
-                          json.dumps({"tool": tool, "arg": arg, "detail": clip(detail, 200), "ts": ts}, ensure_ascii=False))
+            if self.needs_confirm(tool, arg, said):
+                what = cmds.get(arg, arg) if tool == "command" else arg
+                self.post_ask(f"이거 할까냥?\n{ACTIONS[tool].split(' (')[0]}: {clip(what, 200)}", [YES_ACT, NO_ACT], "act", 3600,
+                              detail="네가 한 말에 없는 주소이거나, 기록·고양이를 끄는 일이라서 먼저 묻는다냥.",
+                              act={"tool": tool, "arg": arg, "detail": clip(detail, 200)})
+                done.append(tool + "?")
+                continue
+            self.queue_act(tool, arg, detail, n)
             done.append(tool)
         return done
 

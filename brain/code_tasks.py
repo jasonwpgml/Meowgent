@@ -29,21 +29,34 @@ BINS = {"claude": "claude", "codex": "codex", "cursor": "cursor-agent", "grok": 
 EXTRA_PATH = [str(Path.home() / ".local/bin"), str(Path.home() / ".grok/bin"), "/opt/homebrew/bin", "/usr/local/bin"]
 # Claude Code 는 acceptEdits(파일 고치기만 자동). 확인용 명령만 더 연다 (빌드·테스트는 아래 샌드박스 안에서만 돈다)
 CLAUDE_TOOLS = ["Bash(git diff:*)", "Bash(git status:*)", "Bash(git log:*)", "Bash(swift build:*)", "Bash(python3 -I:*)", "Bash(ls:*)"]
-# Codex 는 자체 샌드박스(workspace-write)가 있다. 나머지 셋은 자동 승인으로 돌므로 macOS 샌드박스(sandbox-exec)로 감싸
-# 쓰기를 worktree · 그 git 폴더 · 도구 자기 설정 · 임시 폴더로 막는다. 읽기와 네트워크(모델 API)는 막지 않는다
+# Codex 는 자체 샌드박스(workspace-write)가 있다. 나머지 셋은 자동 승인으로 돌므로 macOS 샌드박스(sandbox-exec)로 감싼다.
+# 쓰기: worktree(그 .git 연결 파일은 빼고) · 임시 폴더 · 도구가 대화 기록을 남기는 폴더만. 도구 설정·hook·플러그인·실행 파일,
+# 저장소 .git 폴더, ~/.gitconfig 는 못 쓴다 (밖에서 다시 돌 때 실행될 수 있는 곳이라서).
+# 읽기: 키 폴더(~/.ssh 등)와 Meowgent 데이터 폴더는 막는다. 네트워크(모델 API)는 막지 않는다.
 SANDBOXED = {"claude", "cursor", "grok"}
-TOOL_HOMES = {"claude": [".claude", ".claude.json", ".config/claude"], "cursor": [".cursor", ".config/cursor"],
-              "grok": [".grok", ".config/grok"]}
+# 2026-11-04 실측: Claude Code 는 홈에 못 써도 끝낸다. Cursor 는 projects·chats, Grok 은 sessions 가 없으면 시작을 못 한다
+TOOL_STATE = {"claude": [], "cursor": [".cursor/projects", ".cursor/chats"], "grok": [".grok/sessions", ".grok/logs"]}
+SECRET_DIRS = [".ssh", ".aws", ".gnupg", ".config/gh", ".netrc", ".git-credentials", ".docker", ".kube", ".codex",
+               ".codex-meowgent", ".agents/fingerprint", ".config/gcloud", ".azure"]
 
 
-def sandbox_profile(agent, writable):
-    home = Path.home()
-    allow = [*map(str, writable), "/private/tmp", "/private/var/folders", str(home / "Library/Caches"),
-             *(str(home / h) for h in TOOL_HOMES.get(agent, []))]
-    rules = " ".join(f'(subpath "{a}")' for a in allow if '"' not in a and "\\" not in a)
-    # ~/.claude.json 은 바꿔 쓸 때 옆에 임시·백업 파일을 만든다
-    extra = f' (regex #"^{re.escape(str(home))}/\\.claude\\.json")' if agent == "claude" else ""
-    return f'(version 1)(allow default)(deny file-write*)(allow file-write* {rules}{extra} (regex #"^/dev/"))'
+def sandbox_profile(agent, wt, data_dir=None):
+    # 샌드박스는 실제 경로로 본다 (/var → /private/var 같은 바로가기를 풀어 둔다)
+    home, wt = Path.home().resolve(), Path(wt).resolve()
+    data_dir = Path(data_dir).resolve() if data_dir else None
+    q = lambda p: str(p) if '"' not in str(p) and "\\" not in str(p) else None
+    allow = [wt, "/private/tmp", "/private/var/folders", home / "Library/Caches", *(home / h for h in TOOL_STATE.get(agent, []))]
+    w = " ".join(f'(subpath "{q(a)}")' for a in allow if q(a))
+    secrets = " ".join(f'(subpath "{q(home / h)}")' for h in SECRET_DIRS if q(home / h))
+    data = ""
+    if data_dir and q(data_dir):   # 데이터 폴더는 못 읽고, worktree 까지 가는 상위 폴더는 목록만 (getcwd 가 그걸 읽는다)
+        ups = [u for u in wt.parents if u == data_dir or data_dir in u.parents]
+        data = f'(deny file-read-data (subpath "{q(data_dir)}"))' + "".join(f'(allow file-read-data (literal "{q(u)}"))' for u in ups if q(u))
+    # 뒤에 온 같은 종류 규칙이 이긴다 (file-read-data 로 막은 건 file-read-data 로만 풀린다): 쓰기 막고 → 몇 곳 열고 → .git 연결 파일은 다시 막는다. 읽기도 막고 → worktree 만 연다
+    return ('(version 1)(allow default)(deny file-write*)'
+            f'(allow file-write* {w} (regex #"^/dev/"))'
+            f'(deny file-write* (literal "{q(Path(wt) / ".git")}"))'
+            f'(deny file-read* {secrets}){data}(allow file-read-data (subpath "{q(wt)}"))(allow file-read* (subpath "{q(wt)}"))')
 
 
 def write_private(path: Path, text: str):
@@ -68,6 +81,14 @@ def find_bin(agent, path_env=None):
 
 def git(repo, *args, timeout=60):
     r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=timeout)
+    return r.returncode, (r.stdout + r.stderr).strip()
+
+
+def wt_git(t, *args, timeout=60):
+    """에이전트가 손댄 worktree 에서 도는 git (샌드박스 밖). git 폴더를 시작 때 값으로 못 박고, hook·fsmonitor·시스템 설정을 끈다"""
+    env = {**os.environ, "GIT_DIR": t["gitdir"], "GIT_WORK_TREE": t["worktree"], "GIT_CONFIG_NOSYSTEM": "1"}
+    safe = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false"]
+    r = subprocess.run(["git", *safe, *args], cwd=t["worktree"], env=env, capture_output=True, text=True, timeout=timeout)
     return r.returncode, (r.stdout + r.stderr).strip()
 
 
@@ -181,11 +202,14 @@ class Tasks:
         if code != 0:
             self.log(f"worktree 실패: {clip(out, 300)}")
             return None, "worktree를 못 만들었다"
+        code, gitdir = git(wt, "rev-parse", "--absolute-git-dir")   # repo/.git/worktrees/<이름>. 커밋 때 이 값만 쓴다
+        if code != 0 or not Path(gitdir).is_dir():
+            git(repo, "worktree", "remove", "--force", str(wt))
+            return None, "worktree를 못 만들었다"
         prompt = brief(task, request, repo_name, branch)
         cmd = command(agent, find_bin(agent), prompt, wt, d / "last.txt")
         if agent in SANDBOXED:
-            _, gitdir = git(wt, "rev-parse", "--absolute-git-dir")   # repo/.git/worktrees/<이름>: 인덱스만 여기에 쓴다
-            cmd = ["/usr/bin/sandbox-exec", "-p", sandbox_profile(agent, [wt, gitdir]), *cmd]
+            cmd = ["/usr/bin/sandbox-exec", "-p", sandbox_profile(agent, wt, self.dir.parent.parent), *cmd]
         env = {k: v for k, v in os.environ.items() if k != "CODEX_HOME"}   # 고양이 전용 Codex 계정이 아니라 평소 계정
         env["PATH"] = os.pathsep.join([env.get("PATH", "/usr/bin:/bin"), *EXTRA_PATH])
         # sh 로 감싸 끝나면 exit 파일을 남긴다: cat_mind 가 다시 켜져도 끝난 걸 안다
@@ -193,7 +217,8 @@ class Tasks:
         proc = subprocess.Popen(wrapper, cwd=wt, env={**env, "D": str(d)}, start_new_session=True,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         t = {"id": tid, "agent": agent, "agent_name": AGENTS[agent], "repo": repo_name, "repo_path": str(repo),
-             "base": base, "branch": branch, "worktree": str(wt), "task": task, "request": request,
+             "base": base, "branch": branch, "worktree": str(wt), "gitdir": gitdir,
+             "git_link": (wt / ".git").read_text(), "task": task, "request": request,
              "state": "running", "pid": proc.pid, "created": self.now(), "started": self.now()}
         self.save(t)
         self.log(f"코딩 작업 시작: {tid} {repo_name} ({AGENTS[agent]})")
@@ -238,15 +263,21 @@ class Tasks:
 
     def commit(self, t):
         """worktree 의 바뀐 것을 커밋. (바뀐 파일 수, diff --stat 끝 줄)"""
-        wt = t["worktree"]
-        git(wt, "add", "-A")
-        code, names = git(wt, "diff", "--cached", "--name-only")
+        try:
+            link = (Path(t["worktree"]) / ".git").read_text()
+        except OSError:
+            link = None
+        if not t.get("gitdir") or link != t.get("git_link"):   # 에이전트가 .git 연결을 바꿨으면 그 git 폴더를 믿지 않는다
+            t["error"] = clip(((t.get("error") or "") + " worktree 의 .git 이 바뀌어 커밋하지 않았다").strip(), 300)
+            return 0, ""
+        wt_git(t, "add", "-A")
+        code, names = wt_git(t, "diff", "--cached", "--name-only")
         files = [n for n in names.splitlines() if n.strip()] if code == 0 else []
         if not files:
             return 0, ""
         msg = f"묘전트 작업 ({t['agent_name']}): {clip(t['task'], 60)}\n\n사용자 요청: {clip(t['request'], 200)}"
-        git(wt, "-c", "user.name=Meowgent", "-c", "user.email=meowgent@localhost", "commit", "-q", "-m", msg)
-        _, stat = git(wt, "diff", "--stat", f"{t['base']}...HEAD")
+        wt_git(t, "-c", "user.name=Meowgent", "-c", "user.email=meowgent@localhost", "commit", "-q", "--no-verify", "-m", msg)
+        _, stat = wt_git(t, "diff", "--stat", f"{t['base']}...HEAD")
         return len(files), (stat.splitlines() or [""])[-1].strip()
 
     # 끝난 뒤
