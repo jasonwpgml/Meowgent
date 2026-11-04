@@ -504,6 +504,45 @@ do {
     check("개선 제안 읽기", imp?.suggestions.count == 2 && imp?.suggestions[0].current == "30" && imp?.suggestions[1].status == "ignored", "\(String(describing: imp))")
 }
 
+// Grok Bot 전달 (InboxForwardRules)
+do {
+    typealias F = InboxForwardRules
+    check("웹훅: https + 키", F.hook(["url": "https://example.test/automations/webhook/a1", "key": "k1"]) == F.Hook(url: URL(string: "https://example.test/automations/webhook/a1")!, key: "k1"))
+    check("웹훅: http 는 안 씀", F.hook(["url": "http://example.test/x", "key": "k"]) == nil)
+    check("웹훅: 이 맥 안 시험 서버는 http 허용", F.hook(["url": "http://127.0.0.1:8799/h", "key": "k"]) != nil)
+    check("웹훅: 예제 자리표시는 안 씀", F.hook(["url": "https://example.test/x", "key": "PASTE_BEARER_TOKEN"]) == nil && F.hook(["url": "PASTE_WEBHOOK_URL", "key": "k"]) == nil)
+    check("웹훅: Bearer 붙여 넣어도 키만", F.hook(["url": "https://example.test/x", "key": "Bearer abc "])?.key == "abc")
+    check("웹훅: 파일 없음", F.hook(nil) == nil)
+    check("넘길 항목", F.wants(["text": "이력서", "forward": "grokbot"]) && F.wants(["text": "a", "forward": "GrokBot", "kind": "todo"]))
+    check("안 넘김: 표시 없음·질문·빈 글", !F.wants(["text": "a"]) && !F.wants(["text": "a", "forward": "grokbot", "kind": "ask"]) && !F.wants(["text": " ", "forward": "grokbot"]))
+    let now = 1_800_000_000.0
+    var st = F.State(first: now)
+    check("처음은 보낼 차례", F.due(nil, now: now) && F.due(st, now: now))
+    st = F.failed(st, status: 500, error: "HTTP 500", now: now)
+    check("500 실패 → 1분 뒤", st.tries == 1 && st.next == now + 60 && !F.due(st, now: now + 30) && F.due(st, now: now + 61), "\(st)")
+    let auth = F.failed(F.State(first: now), status: 401, error: "HTTP 401", now: now)
+    check("401 실패 → 30분 뒤", auth.next == now + 1800, "\(auth)")
+    check("재시도 간격 상한 4시간", F.retryDelay(tries: 7) == 14400 && F.retryDelay(tries: 50) == 14400)
+    var many = F.State(first: now); for _ in 0..<F.maxTries { many = F.failed(many, status: nil, error: "x", now: now) }
+    check("10번 실패하면 그만", many.gaveUp && !F.due(many, now: now + 1e6))
+    let ok = F.succeeded(st, run: "r1", now: now + 100)
+    check("보낸 뒤로는 다시 안 보냄", ok.sent == now + 100 && ok.run == "r1" && ok.error == nil && !F.due(ok, now: now + 1e6))
+    check("기록 왕복", F.State(ok.json) == ok && F.State(many.json) == many)
+    check("한 시간 보낸 수", F.sentLastHour(["a": ok, "b": F.succeeded(F.State(first: 0), run: nil, now: now - 4000)], now: now + 200) == 1)
+    let old = F.State(first: now - 50 * 86400)
+    let pr = F.prune(["gone": old, "kept": old, "new": st], present: ["kept"], now: now)
+    check("오래되고 없는 기록만 지움", Set(pr.keys) == ["kept", "new"], "\(pr.keys)")
+    let item: [String: Any] = ["text": " 토스 이력서 ", "detail": "키 sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123 는 빼고", "source": "claude-code",
+                               "due": 1_793_000_000.0, "url": "https://example.test/apply", "level": "red", "forward": "grokbot"]
+    let body = F.body(item, id: "t1", machine: "Mac", zone: TimeZone(identifier: "Asia/Seoul")!)
+    check("본문 필드", body["kind"] as? String == "todo" && body["id"] as? String == "t1" && body["text"] as? String == "토스 이력서"
+          && body["from"] as? String == "claude-code" && body["level"] as? String == "red" && body["url"] as? String == "https://example.test/apply", "\(body)")
+    let ctx = body["context"] as? String ?? ""
+    check("context 한 덩어리", ctx.hasPrefix("할일: 토스 이력서\n설명: ") && ctx.contains("마감: ") && ctx.contains("급함") && ctx.hasSuffix("보낸 곳: claude-code (Mac, 묘전트 경유)"), ctx)
+    check("밖으로 나가는 글에서 키 가림", !ctx.contains("abcdefghij") && !((body["detail"] as? String) ?? "").contains("abcdefghij"), ctx)
+    check("긴 글 자름", F.clean(String(repeating: "가", count: 400), max: F.maxText)?.count == F.maxText + 1)
+}
+
 // 여러 개 고르는 질문 (고양이 되묻기·투표) · 고양이가 맡긴 코딩 작업
 do {
     let now = 1_800_000_000.0

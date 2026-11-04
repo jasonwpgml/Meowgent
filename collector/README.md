@@ -105,6 +105,7 @@ python3 tools/actlog_tail.py --stats         # 오늘 종류별 건수, DB 크�
 - 앱 정리용으로 앱별 마지막 사용 시각(앱마다 최신값 하나, 30일 보관)을 활동 기록이 켜져 있을 때만 UserDefaults에 둔다. 기록을 끄면 지운다.
 - 말하는 고양이(`brain/cat_mind.py`, 선택)를 켜면 고양이를 부를 때마다 활동 요약(앱·창 제목·판단, 입력한 글은 빼고)과 사용자가 건 말이 사용자의 Codex 계정으로 간다. 범위와 끄는 법은 [docs/CAT_MIND.md](../docs/CAT_MIND.md).
 - 그 밖에 외부로 보내는 것은 날씨 조회 하나뿐: 고양이 햇살을 맑은 날에만 띄우려고 30분마다 [Open-Meteo](https://open-meteo.com)에 좌표(소수 한 자리, 약 10km 단위)만 보낸다. 기록·입력 내용은 보내지 않는다.
+- Grok Bot 전달(직접 켰을 때만): 데이터 폴더에 `grokbot-webhook.json`을 넣으면, 다른 에이전트가 inbox에 `"forward": "grokbot"`을 붙여 넣은 할일 글만 그 루틴 웹훅으로 보낸다. 키·카드번호 같은 것은 가리고 보낸다 ([docs/INBOX.md](../docs/INBOX.md#grok-bot으로-넘기기)).
   위치 바꾸기: `defaults write com.jason.actlog petLat -float 37.5; defaults write com.jason.actlog petLon -float 127.0` · 끄기: `defaults write com.jason.actlog petWeather -bool false` (그땐 해 뜨고 지는 시간만 본다)
 
 ## 점검

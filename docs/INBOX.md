@@ -41,6 +41,7 @@
 | `url` | | http(s)만. 하위 메뉴에 "열어 보기" |
 | `choices` | | `ask` 선택지. 문자열 또는 `{"id", "label"}` |
 | `multi` | | `true`면 여러 개 고르는 질문 (체크 상자). 묶음으로 합치지 않는다 |
+| `forward` | | `"grokbot"`이면 이 할일을 Grok Bot에도 넘긴다 (아래). `todo`만 |
 
 ## 답 받기
 
@@ -57,3 +58,14 @@
 - **brain** (`brain/actlog_brain.py` `ask_unclear`): 최근 3일 중 10분 넘는 구간인데 프로젝트를 모르면(신뢰도 0.4 미만 또는 "새 작업") 노랑 `?`로 묻는다. 안 답한 질문은 5개까지만 쌓는다(`brain.json`의 `ask_min_s`·`ask_open_max`). 답은 `brain.db`의 `labels` 표에 모아 둔다. 아직 판단에 다시 쓰지는 않는다.
 
 일정·메일(!)과 AND·그록봇(?)은 아직 넣는 쪽이 없다. 각자 위 형식으로 파일을 놓으면 된다.
+
+## Grok Bot으로 넘기기
+
+`"forward": "grokbot"`이 붙은 할일(`todo`)은 고양이에 뜨는 것과 함께 Grok Bot 자동화(루틴) 웹훅으로도 간다. 코드: `collector/Sources/ActLog/InboxForward.swift`(보내기) · `InboxForwardRules.swift`(판단, 테스트 있음).
+
+- **켜기**: Grok Bot에서 웹훅으로 시작하는 루틴을 만들고, 루틴 화면의 Webhook 칸에 나오는 POST 주소와 키를 `{ "url": "...", "key": "..." }`로 적어 둔다. 기본 위치는 데이터 폴더의 `grokbot-webhook.json`(0600)이다. 다른 파일을 쓰려면 `defaults write io.github.jasonwpgml.meowgent grokbotWebhookFile <경로>`. 파일이 없거나 주소가 https가 아니면 보내지 않는다. 이 맥 안의 시험 서버(`http://127.0.0.1`)는 예외다.
+- **보내는 것**: `POST <url>`, `Authorization: Bearer <key>`, 본문 JSON `{context, source:"meowgent", kind:"todo", id, text, detail, due, url, level, from, machine, created}`. `context`는 사람이 읽는 몇 줄이고, Grok Bot 앱이 웹훅 루틴을 시험할 때 보내는 모양과 같다. 글은 키·카드번호를 가리고(`Privacy.redact`), 제목 300자·설명 2000자에서 자른다. 활동 기록·코드는 보내지 않는다.
+- **언제**: 10초마다 읽어서 아직 안 보낸 것을 보낸다. 한 번에 3개, 한 시간에 30개까지 보낸다. 웹훅 한 번이 Grok Bot 사용량을 쓰기 때문이다. 고양이가 꺼져 있었으면 켜질 때 보낸다. 확인해서 `done/`으로 옮긴 뒤에는 보내지 않는다.
+- **결과**: `inbox-forward.json`에 항목 id별로 `sent`(보낸 시각), `run`(Grok Bot 실행 id), `tries`, `error`가 남는다. inbox 파일은 건드리지 않는다. 200을 받았다는 건 Grok Bot이 실행을 시작했다는 뜻일 뿐이고, 결과는 그 봇 채팅에서 본다.
+- **실패하면**: 1분, 5분, 15분, 30분, 1시간, 2시간, 그 뒤로는 4시간마다 다시 보낸다. 400·401·403·404는 키나 루틴 문제라서 30분부터 시작한다. 10번 실패하면 멈추고 고양이가 한 번 알린다. 메뉴바 메뉴에 "📮 Grok Bot 전달" 줄이 나온다.
+- **다른 에이전트가 쓰는 법**: Agent Hub 스킬 `grokbot-todo`(`scripts/add-todo.mjs`)가 이 파일을 만들어 준다.

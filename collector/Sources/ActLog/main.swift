@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var mind = MindBridge(dataDir: dataDir)
     lazy var launcher = Launcher(dataDir: dataDir)
     lazy var dashboard = Dashboard(dataDir: dataDir)
+    lazy var forward = InboxForward(dataDir: dataDir)
     var statusItem: NSStatusItem!
     var resumeTimer: Timer?
     var permissionTimer: Timer?
@@ -110,6 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         shortcuts.start()
 
         setupMenu()
+        forward.start()
         startPet()
         launcher.canPersist = { [weak self] in self?.recordingEnabled == true }
         launcher.notify = { [weak self] t in self?.pet?.notify(t, urgent: false) }
@@ -204,6 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if self?.gate(n.text, urgent: n.urgent) == true { p?.notify(n.text, urgent: n.urgent) }
         }
         mind.say = { [weak p] l in p?.notify(l.text, urgent: l.urgent) }
+        forward.notify = { [weak p] t in p?.notify(t, urgent: false) }
         mind.trick = { [weak p] name in p?.trick(name) }
         // 대화로 부를 수 있는 기능 (고양이가 actions 의 command 로 이 id 만 쓴다). 되돌리기 어려운 것(종료·권한·삭제)은 넣지 않는다
         var cmds: [(id: String, title: String, run: () -> Void)] = [
@@ -273,6 +276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         info("손쉬운 사용: \(ax ? "허용됨" : "필요")  ·  입력 모니터링: \(input ? "허용됨" : "필요")")
         if IsSecureEventInputEnabled() { info("⚠︎ 다른 앱이 보안 입력 사용 중 (키 횟수 수집 중단)") }
         info("이번 실행 \(store.written)건 기록 · DB \(ByteCountFormatter.string(fromByteCount: store.sizeBytes, countStyle: .file))")
+        forward.addMenuItems(to: menu)
         menu.addItem(.separator())
         dashboard.addMenuItems(to: menu)
 
