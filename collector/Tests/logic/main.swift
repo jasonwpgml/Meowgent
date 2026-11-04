@@ -541,6 +541,15 @@ do {
     check("context 한 덩어리", ctx.hasPrefix("할일: 토스 이력서\n설명: ") && ctx.contains("마감: ") && ctx.contains("급함") && ctx.hasSuffix("보낸 곳: claude-code (Mac, 묘전트 경유)"), ctx)
     check("밖으로 나가는 글에서 키 가림", !ctx.contains("abcdefghij") && !((body["detail"] as? String) ?? "").contains("abcdefghij"), ctx)
     check("긴 글 자름", F.clean(String(repeating: "가", count: 400), max: F.maxText)?.count == F.maxText + 1)
+    check("링크: 쿼리 토큰·주소 속 비밀번호 가림", F.link("https://me:pw@example.test/cb?code=abc123&id=7#access_token=zz") == "https://example.test/cb?code=REDACTED&id=7#REDACTED",
+          F.link("https://me:pw@example.test/cb?code=abc123&id=7#access_token=zz") ?? "nil")
+    check("링크: 경로 속 키 모양 가림", !(F.link("https://example.test/k/sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123") ?? "").contains("abcdefghij"))
+    check("링크: http(s)·호스트 없거나 너무 길면 버림", F.link("javascript:alert(1)") == nil && F.link("httpx://a") == nil && F.link("https://") == nil
+          && F.link("https://example.test/" + String(repeating: "a", count: F.maxURL)) == nil && F.link(nil) == nil)
+    let sneaky = F.body(["text": "a", "source": "x sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123 " + String(repeating: "b", count: 100), "url": "https://example.test/?token=t0k"],
+                        id: "t2", machine: "Mac")
+    check("보낸 곳·링크도 가리고 자름", !((sneaky["from"] as? String) ?? "").contains("abcdefghij") && ((sneaky["from"] as? String) ?? "").count <= F.maxSource + 1
+          && sneaky["url"] as? String == "https://example.test/?token=REDACTED" && !((sneaky["context"] as? String) ?? "").contains("t0k"), "\(sneaky)")
 }
 
 // 여러 개 고르는 질문 (고양이 되묻기·투표) · 고양이가 맡긴 코딩 작업

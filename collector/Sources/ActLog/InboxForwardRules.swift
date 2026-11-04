@@ -105,7 +105,19 @@ enum InboxForwardRules {
         let r = Privacy.redact(s).0
         return r.count > max ? String(r.prefix(max)) + "…" : r
     }
-    static let maxText = 300, maxDetail = 2000
+    static let maxText = 300, maxDetail = 2000, maxURL = 2000, maxSource = 64
+
+    /// 밖으로 나가는 링크: http(s) 이고 호스트가 있는 것만. 주소 안 아이디·비밀번호는 떼고,
+    /// 로그인 코드·토큰 같은 쿼리 값(Privacy.sanitize)과 키 모양 글(Privacy.redact)은 가린다. 너무 길면 버린다
+    static func link(_ v: Any?) -> String? {
+        guard let raw = (v as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty, raw.count <= maxURL,
+              var c = URLComponents(string: raw), ["http", "https"].contains(c.scheme?.lowercased() ?? ""),
+              !(c.host ?? "").isEmpty else { return nil }
+        c.user = nil
+        c.password = nil
+        guard let s = Privacy.sanitize(url: c.string) else { return nil }
+        return Privacy.redact(s).0
+    }
 
     /// 사람이 읽는 한 줄 + 세부. Grok Bot 루틴은 본문 전체를 받지만 Grok Bot 앱이 보내는 모양(`context`)도 맞춘다
     static func context(_ o: [String: Any], machine: String, zone: TimeZone = .current) -> String {
@@ -113,21 +125,21 @@ enum InboxForwardRules {
         if let d = clean(o["detail"], max: maxDetail) { lines.append("설명: " + d) }
         if let due = o["due"] as? Double { lines.append("마감: " + shortTime(due, zone: zone)) }
         if o["level"] as? String == "red" { lines.append("급함") }
-        if let u = o["url"] as? String, u.hasPrefix("http") { lines.append("링크: " + u) }
-        let from = (o["source"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "?"
+        if let u = link(o["url"]) { lines.append("링크: " + u) }
+        let from = clean(o["source"], max: maxSource) ?? "?"
         lines.append("보낸 곳: \(from) (\(machine), 묘전트 경유)")
         return lines.joined(separator: "\n")
     }
 
-    /// POST 본문. 코드·대화 내용은 넣지 않고 inbox 항목에 적힌 것만
+    /// POST 본문. 코드·대화 내용은 넣지 않고 inbox 항목에 적힌 것만. 글은 모두 clean·link 를 거친다
     static func body(_ o: [String: Any], id: String, machine: String, zone: TimeZone = .current) -> [String: Any] {
         var b: [String: Any] = ["source": "meowgent", "kind": "todo", "id": id, "machine": machine,
                                 "text": clean(o["text"], max: maxText) ?? "",
-                                "from": o["source"] as? String ?? "", "level": o["level"] as? String == "red" ? "red" : "yellow",
+                                "from": clean(o["source"], max: maxSource) ?? "", "level": o["level"] as? String == "red" ? "red" : "yellow",
                                 "context": context(o, machine: machine, zone: zone)]
         if let d = clean(o["detail"], max: maxDetail) { b["detail"] = d }
         if let due = o["due"] as? Double { b["due"] = iso(due) }
-        if let u = o["url"] as? String, u.hasPrefix("http") { b["url"] = u }
+        if let u = link(o["url"]) { b["url"] = u }
         if let c = o["created"] as? Double { b["created"] = iso(c) }
         return b
     }
