@@ -262,8 +262,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func updateStatusIcon() {
         let s = Context.shared.snapshot
         let ok = axStarted && tap.isEnabled
-        statusItem?.button?.title = s.paused ? "◌" : (ok ? "◉" : "◎")
-        statusItem?.button?.toolTip = s.paused ? (recordingEnabled ? "Meowgent: 일시정지" : "Meowgent: 고양이만 (기록 꺼짐)") : (ok ? "Meowgent: 기록 중" : "Meowgent: 권한 필요")
+        let tip = s.paused ? (recordingEnabled ? "Meowgent: 일시정지" : "Meowgent: 고양이만 (기록 꺼짐)") : (ok ? "Meowgent: 기록 중" : "Meowgent: 권한 필요")
+        // 발바닥: 기록 중 = 채움, 일시정지 = 빈 발바닥, 권한 필요 = 채움 + "!"
+        guard let button = statusItem?.button else { return }
+        button.image = NSImage(systemSymbolName: s.paused ? "pawprint" : "pawprint.fill", accessibilityDescription: tip)
+        button.imagePosition = .imageLeading
+        button.title = (!s.paused && !ok) ? "!" : ""
+        button.toolTip = tip
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
