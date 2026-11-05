@@ -22,6 +22,17 @@ if [[ -f "$CATS/sit_front.png" && -f "$LOCK" ]]; then
 else
   echo "경고: 고양이 원화 없음 (pet/ 비어 있음) → 고양이 없이 번들"
 fi
+# 고양이 소리 (Freesound CC0 녹음을 다듬은 것, 비공개 pet/ 저장소). 없으면 소리 없이 번들
+SOUNDS=../pet/assets/sounds
+if compgen -G "$SOUNDS/*.m4a" >/dev/null; then
+  mkdir -p "$BUNDLE/Contents/Resources/sounds"
+  cp "$SOUNDS"/*.m4a "$BUNDLE/Contents/Resources/sounds/"
+fi
+# 밈 원곡(우이이아이이 등): 권리가 우리 것이 아니라 개발 빌드에만 넣는다 (배포본 release.sh 는 INCLUDE_VENDOR 를 켜지 않는다)
+if [[ "${INCLUDE_VENDOR:-}" == 1 ]] && compgen -G "../pet/assets/vendor-sounds/*.*" >/dev/null; then
+  mkdir -p "$BUNDLE/Contents/Resources/sounds"
+  cp ../pet/assets/vendor-sounds/*.* "$BUNDLE/Contents/Resources/sounds/"
+fi
 # 팩 그림: 재배포 금지 라이선스라 배포본에는 넣지 않는다
 if [[ "${INCLUDE_VENDOR:-}" == 1 ]]; then
   for n in 1 2 3; do

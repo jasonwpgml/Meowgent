@@ -79,3 +79,10 @@ https://github.com/mmar/Cat
 Pexels 자료(표기 의무 없음): 걷기 영상 Bayram Yalçın 외. https://www.pexels.com/license/
 
 CC BY 2.0: https://creativecommons.org/licenses/by/2.0/ · CC BY 2.5: https://creativecommons.org/licenses/by/2.5/
+
+## 고양이 소리
+
+냐옹·하품·쩝쩝·그르릉·착지·타자 소리는 Freesound(https://freesound.org)의 CC0(퍼블릭 도메인 기증) 녹음을 잘라 크기를 맞춘 것입니다. 표기 의무는 없지만 고마운 마음으로 적어 둡니다:
+tuberatanka · skymary · steffcaffrey · megrez7274 · Daphne_in_Wonderland · KVV_Audio · superEGsonic · courtneyeck · busukbangak · Techrul.
+"우이이아이이" 소리는 밈 원본 소리를 쓰지 않고, 위 냐옹 녹음을 잘라 음높이를 바꿔 이은 것과 직접 합성한 목소리입니다.
+CC0: https://creativecommons.org/publicdomain/zero/1.0/
