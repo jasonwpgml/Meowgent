@@ -10,6 +10,8 @@ cp .build/release/ActLog "$BUNDLE/Contents/MacOS/Meowgent"
 cp Info.plist "$BUNDLE/Contents/Info.plist"
 cp AppIcon.icns "$BUNDLE/Contents/Resources/AppIcon.icns"
 cp LICENSES.md "$BUNDLE/Contents/Resources/LICENSES.md"
+# 메뉴바 고양이 손 (사진에서 딴 우리 그림, 만든 방법은 ../assets/menubar-paw)
+cp Resources/MenuBarPaw.png Resources/MenuBarPaw@2x.png Resources/MenuBarPaw@3x.png "$BUNDLE/Contents/Resources/"
 cp ../assets/fonts/Galmuri11.ttf ../assets/fonts/Galmuri11-Bold.ttf ../assets/fonts/LICENSE-OFL.txt "$BUNDLE/Contents/Resources/fonts/"
 # 원화 (우리 그림, 비공개 pet/ 저장소): AES 로 잠가 .sprite 로 넣는다. 패키지를 열어도 PNG 가 아니다.
 # (스크린샷으로 화면 픽셀을 복원하는 것까지는 막지 못한다 — 그림은 저작권으로 지킨다)

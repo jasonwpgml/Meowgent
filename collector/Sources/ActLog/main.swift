@@ -259,13 +259,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateStatusIcon()
     }
 
+    /// 메뉴바 고양이 손 (실제 사진에서 딴 그림, assets/menubar-paw). 번들 밖에서 돌릴 때는 시스템 발바닥으로 대신한다.
+    static let menuBarPaw: NSImage? = {
+        let img = Bundle.main.image(forResource: "MenuBarPaw") ?? NSImage(systemSymbolName: "pawprint.fill", accessibilityDescription: nil)
+        img?.isTemplate = true
+        return img
+    }()
+
     func updateStatusIcon() {
         let s = Context.shared.snapshot
         let ok = axStarted && tap.isEnabled
         let tip = s.paused ? (recordingEnabled ? "Meowgent: 일시정지" : "Meowgent: 고양이만 (기록 꺼짐)") : (ok ? "Meowgent: 기록 중" : "Meowgent: 권한 필요")
-        // 고양이 발바닥: 기록 중 = 또렷하게, 일시정지 = 흐리게, 권한 필요 = 옆에 "!"
+        // 고양이 손: 기록 중 = 또렷하게, 일시정지 = 흐리게, 권한 필요 = 옆에 "!"
         guard let button = statusItem?.button else { return }
-        button.image = CatPaw.image(description: tip)
+        button.image = Self.menuBarPaw
+        button.image?.accessibilityDescription = tip
         button.imagePosition = .imageLeading
         button.appearsDisabled = s.paused
         button.title = (!s.paused && !ok) ? "!" : ""

@@ -77,6 +77,7 @@ https://github.com/mmar/Cat
 
 퍼블릭 도메인·CC0 자료: Eadweard Muybridge, Animal Locomotion Plate 716~720 (Boston Public Library) · George Miquilena · Alistair Findlay · oldperson · Ryan Schwark · Andrew Krizhanovsky.
 Pexels 자료(표기 의무 없음): 걷기 영상 Bayram Yalçın 외. https://www.pexels.com/license/
+메뉴바 고양이 손(표기 의무 없음): 손 외곽은 Sebastian Schuster의 Unsplash 사진에서 땄습니다. https://unsplash.com/license
 
 CC BY 2.0: https://creativecommons.org/licenses/by/2.0/ · CC BY 2.5: https://creativecommons.org/licenses/by/2.5/
 
