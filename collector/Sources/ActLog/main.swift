@@ -263,10 +263,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let s = Context.shared.snapshot
         let ok = axStarted && tap.isEnabled
         let tip = s.paused ? (recordingEnabled ? "Meowgent: 일시정지" : "Meowgent: 고양이만 (기록 꺼짐)") : (ok ? "Meowgent: 기록 중" : "Meowgent: 권한 필요")
-        // 발바닥: 기록 중 = 채움, 일시정지 = 빈 발바닥, 권한 필요 = 채움 + "!"
+        // 고양이 발바닥: 기록 중 = 또렷하게, 일시정지 = 흐리게, 권한 필요 = 옆에 "!"
         guard let button = statusItem?.button else { return }
-        button.image = NSImage(systemSymbolName: s.paused ? "pawprint" : "pawprint.fill", accessibilityDescription: tip)
+        button.image = CatPaw.image(description: tip)
         button.imagePosition = .imageLeading
+        button.appearsDisabled = s.paused
         button.title = (!s.paused && !ok) ? "!" : ""
         button.toolTip = tip
     }
