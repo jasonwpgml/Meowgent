@@ -623,5 +623,28 @@ m.run_actions(cmd("pause60"), "한 시간 기록 멈춰")
 check("멈추라고 했으면 바로", len(acts()) == 1)
 check("확인 질문은 고양이 질문 수에 안 셈", m.open_asks() == asks0)
 
+# 말풍선 반응 계측: 말마다 id, 판단 기록 sid 로 잇기, 🔇 로 끈 신호는 Clef·Codex 를 안 부름
+m, clock, data = make(T0, [(1, T0 - 900, T0, "open", "Code", {"stuck": ("yes", 0.8)})])
+m.cfg["late_hours"] = [0, 0]
+m.tick(); m.tick()
+out = json.loads(next((m.dir / "out").glob("*.json")).read_text())
+said = [json.loads(l) for l in (m.dir / "decisions.jsonl").read_text().splitlines() if '"said"' in l]
+check("말풍선에 id", out.get("id", "").startswith("m-") and out["kind"] == "stuck", out)
+check("판단 기록 sid = 말풍선 id, 신호 이름도", said and said[-1].get("sid") == out["id"] and said[-1].get("trig") == "stuck", said)
+m, clock, data = make(T0, [(1, T0 - 900, T0, "open", "Code", {"stuck": ("yes", 0.8)})])
+m.cfg["late_hours"] = [0, 0]
+(data / "muted.json").write_text(json.dumps({"mind:stuck": T0 + 3600}))
+m.tick(); m.tick()
+decs = [json.loads(l) for l in (m.dir / "decisions.jsonl").read_text().splitlines()]
+check("끈 신호는 Clef·Codex 안 부름", m.clef.calls == [] and m.codex.started == [], (m.clef.calls, m.codex.started))
+check("끈 신호는 한 번만 남김", [d["outcome"] for d in decs] == ["muted"] and decs[0]["trig"] == "stuck", decs)
+m, clock, data = make(T0, [(1, T0 - 900, T0, "open", "Code", {"stuck": ("yes", 0.8)})])
+m.cfg["late_hours"] = [0, 0]
+(data / "muted.json").write_text(json.dumps({"mind:stuck": T0 - 1}))
+m.tick()
+check("끈 기한이 지나면 다시 말함", len(m.codex.started) == 1)
+(data / "muted.json").write_text("깨진 파일")
+check("muted.json 이 깨져도 안 끈 것으로", m.muted("stuck") is False)
+
 print("\n" + ("모두 통과" if not failed else f"{failed}개 실패"))
 sys.exit(1 if failed else 0)

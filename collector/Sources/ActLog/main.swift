@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var launcher = Launcher(dataDir: dataDir)
     lazy var dashboard = Dashboard(dataDir: dataDir)
     lazy var forward = InboxForward(dataDir: dataDir)
+    lazy var reactions = Reactions(dataDir: dataDir)
     var statusItem: NSStatusItem!
     var resumeTimer: Timer?
     var permissionTimer: Timer?
@@ -102,7 +103,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.text.notePaste(chars: r.chars)
             if r.sensitive {
                 let s = Context.shared.snapshot
-                self.pet?.notify("🔑 방금 붙여넣은 거에 키·토큰·카드번호 같은 게 있다냥. 꼭 확인해 봐라냥\n붙여넣은 곳: \(s.app ?? "?")\(s.url.map { " · " + (URL(string: $0)?.host ?? "") } ?? "")", urgent: true)
+                let t = "🔑 방금 붙여넣은 거에 키·토큰·카드번호 같은 게 있다냥. 꼭 확인해 봐라냥\n붙여넣은 곳: \(s.app ?? "?")\(s.url.map { " · " + (URL(string: $0)?.host ?? "") } ?? "")"
+                self.pet?.notify(t, urgent: true, track: self.reactions.track(src: "secret", kind: "secret", text: t, canMute: false))
             }
         }
         tap.onClick = { [weak self] p, b, ts, mono in self?.clicks.resolve(point: p, button: b, ts: ts, mono: mono) }
@@ -195,18 +197,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         shortcuts.show = { [weak p] h in p?.keyHint(h.keys, h.title) ?? false }
         // 숫자만 다른 같은 알림은 잠깐 다시 말하지 않는다 (NoticeBatch.Gate). 고양이 대화 답은 거르지 않는다
+        // 말풍선마다 반응(보임·답함·무시·👎·🔇)을 reactions.jsonl 에 남긴다. 🔇 로 끈 종류는 다음 아침까지 말하지 않는다
         quota.notify = { [weak self, weak p] n in
-            if self?.gate(n.text, urgent: n.urgent) == true { p?.notify(n.text, urgent: n.urgent, validUntil: n.validUntil) }
+            guard let self, self.allow("quota"), self.gate(n.text, urgent: n.urgent) else { return }
+            p?.notify(n.text, urgent: n.urgent, validUntil: n.validUntil, track: self.reactions.track(src: "quota", kind: "quota", text: n.text, canMute: true))
         }
         resources.notify = { [weak self, weak p] n in
-            if self?.gate(n.text, urgent: n.urgent) == true { p?.notify(n.text, urgent: n.urgent, validUntil: n.validUntil, detail: n.detail) }
+            guard let self, self.allow("resource"), self.gate(n.text, urgent: n.urgent) else { return }
+            p?.notify(n.text, urgent: n.urgent, validUntil: n.validUntil, detail: n.detail,
+                      track: self.reactions.track(src: "resource", kind: "resource", text: n.text, canMute: true))
         }
         quota.codexFallback = { [weak self] in self?.agents.codexWindows ?? [] }
         agents.notify = { [weak self, weak p] n in
-            if self?.gate(n.text, urgent: n.urgent) == true { p?.notify(n.text, urgent: n.urgent) }
+            guard let self, self.allow("agent"), self.gate(n.text, urgent: n.urgent) else { return }
+            p?.notify(n.text, urgent: n.urgent, track: self.reactions.track(src: "agent", kind: "agent", text: n.text, canMute: true))
         }
-        mind.say = { [weak p] l in p?.notify(l.text, urgent: l.urgent) }
-        forward.notify = { [weak p] t in p?.notify(t, urgent: false) }
+        mind.say = { [weak self, weak p] l in
+            guard let self else { return }
+            // 먼저 말 건 것(신호 이름)만 끌 수 있다. 사용자가 건 말에 한 답(chat)과 앱이 낸 말(kind 없음)은 끄지 않는다
+            let kind = "mind:" + (l.kind ?? "system")
+            let mutable = l.kind.map { !["chat", "say", "system"].contains($0) } ?? false
+            if mutable, !self.allow(kind) { return }
+            p?.notify(l.text, urgent: l.urgent, reply: { [weak self] in self?.mind.talk() },
+                      track: self.reactions.track(src: "mind", kind: kind, text: l.text, id: l.id, canMute: mutable))
+        }
+        mind.opened = { [weak self] in self?.reactions.chatOpened() }
+        forward.notify = { [weak self, weak p] t in
+            guard let self, self.allow("forward") else { return }
+            p?.notify(t, urgent: false, track: self.reactions.track(src: "forward", kind: "forward", text: t, canMute: true))
+        }
         mind.trick = { [weak p] name in p?.trick(name) }
         // 대화로 부를 수 있는 기능 (고양이가 actions 의 command 로 이 id 만 쓴다). 되돌리기 어려운 것(종료·권한·삭제)은 넣지 않는다
         var cmds: [(id: String, title: String, run: () -> Void)] = [
@@ -241,6 +260,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private var noticeGate = NoticeBatch.Gate()
+    /// 🔇 로 끈 종류면 말하지 않는다 (다음 아침까지)
+    private func allow(_ kind: String) -> Bool {
+        if reactions.isMuted(kind) { Log.write("끈 종류라 안 말함: \(kind)"); return false }
+        return true
+    }
+
     private func gate(_ text: String, urgent: Bool) -> Bool {
         noticeGate.allow(text, urgent: urgent, now: Date().timeIntervalSince1970)
     }

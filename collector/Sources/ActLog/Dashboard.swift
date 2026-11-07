@@ -36,6 +36,8 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
     private var notices: [NoticeRules.Notice] = []
     private var chat: Set<String> = []
     private var decisions: [ThinkRules.Decision] = []
+    private var reactions: [String: String] = [:]   // 말풍선 id → 대표 반응 (reactions.jsonl)
+    private var labels: [String: String] = [:]      // 판단 키 → right · wrong (mind/decision_labels.jsonl)
     private var improve: ThinkRules.Improve?
     private var tasks: [TaskRules.Task] = []
     private var picks: [String: [String]] = [:]     // 여러 개 고르는 질문에서 체크한 보기 id (고른 순서)
@@ -150,6 +152,10 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
         notices = loadNotices()
         chat = loadChat()
         decisions = ThinkRules.parse(Self.tail(mindDir.appendingPathComponent("decisions.jsonl")))
+        let reactText = Self.tail(dataDir.appendingPathComponent("reactions.jsonl"))
+        reactions = ReactionRules.byID(reactText)
+        let labelText = Self.tail(mindDir.appendingPathComponent("decision_labels.jsonl"))
+        labels = ThinkRules.labels(labelText)
         improve = (try? Data(contentsOf: mindDir.appendingPathComponent("improve/latest.json"))).flatMap(ThinkRules.parseImprove)
         tasks = loadTasks()
         unchecked.formIntersection(Set(items.map(\.id)))
@@ -162,7 +168,7 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
         for (n, r) in sideRows.enumerated() { r.selected = n == tab.rawValue }
         // 하는 중인 작업은 분이 바뀔 때마다 다시 그린다
         let taskStamp = tasks.map { "\($0.id):\($0.state)" }.joined(separator: ",") + (tab == .tasks && tasks.contains { $0.state == "running" } ? "|\(Int(Date().timeIntervalSince1970 / 60))" : "")
-        let stamp = "\(tab.rawValue)|" + items.map(\.file).joined(separator: ",") + "|\(notices.last?.ts ?? 0)|\(decisions.last?.ts ?? 0)|\(improve?.ts ?? 0)|\(improveOn)|" + taskStamp
+        let stamp = "\(tab.rawValue)|" + items.map(\.file).joined(separator: ",") + "|\(notices.last?.ts ?? 0)|\(decisions.last?.ts ?? 0)|\(reactText.count)|\(labelText.count)|\(improve?.ts ?? 0)|\(improveOn)|" + taskStamp
         guard force || stamp != shownStamp else { return }
         shownStamp = stamp
         render()
@@ -734,7 +740,9 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
         let recent = decisions.filter { $0.ts >= week }
         func n(_ o: String) -> Int { recent.filter { $0.outcome == o }.count }
         let failed = n("failed") + n("timeout") + n("limited")
+        let labeled = recent.filter { labels[ThinkRules.key($0)] != nil }.count
         window?.subtitle = recent.isEmpty ? "" : "최근 7일 · 말함 \(n("said")) · 참음 \(n("quiet"))\(failed > 0 ? " · 실패 \(failed)" : "")"
+            + (labeled > 0 ? " · 라벨 \(labeled)" : "")
         guard !list.isEmpty else { add(emptyState("brain", q.isEmpty ? "판단 기록 없음" : "찾는 기록 없음")); return }
         let day = DateFormatter(); day.locale = Locale(identifier: "ko_KR"); day.dateFormat = "M월 d일 EEEE"
         var lastDay = ""
@@ -792,7 +800,7 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
 
     private func decisionRow(_ d: ThinkRules.Decision) -> NSView {
         let symbol = ["said": "bubble.left", "quiet": "moon.zzz", "failed": "exclamationmark.triangle", "timeout": "clock.badge.xmark",
-                      "limited": "hourglass", "retry": "arrow.clockwise"][d.outcome] ?? "circle"
+                      "limited": "hourglass", "retry": "arrow.clockwise", "muted": "speaker.slash"][d.outcome] ?? "circle"
         let icon = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
         icon.symbolConfiguration = .init(pointSize: 14, weight: .regular)
         icon.contentTintColor = ["failed", "timeout"].contains(d.outcome) ? .systemRed : .secondaryLabelColor
@@ -803,9 +811,11 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
         title.lineBreakMode = .byTruncatingTail
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         var col: [NSView] = [title]
-        let sub = ThinkRules.subtitle(d)
+        let reaction = d.sid.flatMap { reactions[$0] }.flatMap { ReactionRules.ko[$0] }
+        let sub = [ThinkRules.subtitle(d), reaction.map { "반응: " + $0 } ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
         if !sub.isEmpty { col.append(expandable(sub, key: "d-s\(d.ts)", lines: 1, size: 11)) }
         if let t = d.text { col.append(expandable("“\(t)”", key: "d-t\(d.ts)", lines: 2, size: 12)) }
+        if ThinkRules.labelable(d) { col.append(labelButtons(d)) }
         let texts = NSStackView(views: col)
         texts.orientation = .vertical
         texts.alignment = .leading
@@ -823,6 +833,40 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
         row.alignment = .firstBaseline
         row.spacing = 10
         return row
+    }
+
+    /// 판단이 맞았나: 고른 쪽은 ✓, 다시 누르면 지운다. 나중에 '언제 말할지' 판단기를 학습하는 정답이 된다
+    private func labelButtons(_ d: ThinkRules.Decision) -> NSView {
+        let key = ThinkRules.key(d)
+        let cur = labels[key]
+        let titles = ThinkRules.labelTitles(d)
+        let views: [NSView] = [("right", titles.right), ("wrong", titles.wrong)].map { verdict, title in
+            let b = button((cur == verdict ? "✓ " : "") + title) { [weak self] in
+                self?.label(d, verdict: cur == verdict ? "clear" : verdict)
+            }
+            b.controlSize = .small
+            b.font = .systemFont(ofSize: 11)
+            return b
+        }
+        let r = NSStackView(views: views)
+        r.spacing = 6
+        return r
+    }
+
+    private func label(_ d: ThinkRules.Decision, verdict: String) {
+        let url = mindDir.appendingPathComponent("decision_labels.jsonl")
+        let o = ThinkRules.labelLine(d, verdict: verdict, now: Date().timeIntervalSince1970)
+        guard let data = try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys]),
+              let line = String(data: data, encoding: .utf8) else { return }
+        let bytes = Data((line + "\n").utf8)
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile(); h.write(bytes); try? h.close()
+        } else {
+            try? FileManager.default.createDirectory(at: mindDir, withIntermediateDirectories: true)
+            try? bytes.write(to: url, options: .atomic)
+            chmod(url.path, 0o600)
+        }
+        reload(force: true)
     }
 
     // MARK: 개선 (주간 개선 제안)

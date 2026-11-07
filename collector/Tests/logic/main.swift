@@ -568,5 +568,51 @@ do {
     check("id 없으면 버림", TaskRules.parse(["state": "done"]) == nil)
 }
 
+// 말풍선 반응 기록 (실시간 업무 보조 0단계 계측) · 생각 탭 판단 라벨
+do {
+    var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "Asia/Seoul")!
+    func at(_ h: Int, _ m: Int = 0) -> Date { cal.date(from: DateComponents(year: 2026, month: 11, day: 7, hour: h, minute: m))! }
+    check("끄기: 저녁에 끄면 다음 날 6시", ReactionRules.muteUntil(now: at(21), cal: cal) == cal.date(byAdding: .day, value: 1, to: at(6))!)
+    check("끄기: 새벽 2시에 끄면 그날 6시", ReactionRules.muteUntil(now: at(2), cal: cal) == at(6))
+    check("끄기: 6시 정각이면 다음 날 6시", ReactionRules.muteUntil(now: at(6), cal: cal) == cal.date(byAdding: .day, value: 1, to: at(6))!)
+    check("지난 끄기는 버림", ReactionRules.active(["a": 10, "b": 30], now: 20) == ["b": 30])
+
+    let shown = ReactionRules.line(id: "m-1", ev: "shown", src: "mind", kind: "mind:stuck", text: "줄1\n줄2", shownAt: nil, now: 100)
+    check("보임: 글은 한 줄로, 걸린 시간 없음", shown["text"] as? String == "줄1 / 줄2" && shown["after"] == nil, "\(shown)")
+    let long = ReactionRules.line(id: "m-1", ev: "shown", src: "mind", kind: "k", text: String(repeating: "가", count: 300), shownAt: nil, now: 1)
+    check("보임: 글은 160자까지", (long["text"] as? String)?.count == 160)
+    let ign = ReactionRules.line(id: "m-1", ev: "ignored", src: "mind", kind: "mind:stuck", text: "줄1", shownAt: 100, now: 107.04)
+    check("반응: 글은 안 남기고 걸린 시간만", ign["text"] == nil && ign["after"] as? Double == 7.0, "\(ign)")
+
+    let s = ReactionRules.Shown(id: "m-1", src: "mind", kind: "mind:stuck", at: 100)
+    check("대화창을 2분 안에 열면 답한 것", ReactionRules.creditsChat(s, now: 200) && !ReactionRules.creditsChat(s, now: 221))
+    var touched = s; touched.touched = true
+    check("이미 손댄 말풍선·고양이 말 아닌 건 안 셈", !ReactionRules.creditsChat(touched, now: 150)
+          && !ReactionRules.creditsChat(.init(id: "n-1", src: "agent", kind: "agent", at: 100), now: 150))
+    check("손댄 사건", ReactionRules.touches("replied") && ReactionRules.touches("muted") && !ReactionRules.touches("read") && !ReactionRules.touches("shown"))
+
+    let log = [
+        #"{"id":"m-1","ev":"shown"}"#, #"{"id":"m-1","ev":"read"}"#,
+        #"{"id":"m-2","ev":"shown"}"#, #"{"id":"m-2","ev":"detail"}"#, #"{"id":"m-2","ev":"rejected"}"#,
+        #"{"id":"m-3","ev":"shown"}"#, #"{"id":"m-3","ev":"ignored"}"#,
+        #"{"id":"m-4","ev":"dropped"}"#, "깨진 줄",
+    ].joined(separator: "\n")
+    let by = ReactionRules.byID(log)
+    check("대표 반응: 강한 것", by == ["m-1": "read", "m-2": "rejected", "m-3": "ignored", "m-4": "dropped"], "\(by)")
+
+    let said = ThinkRules.parse(#"{"ts": 1794059165.7005599, "trig": "long_focus", "p": 0.89, "kind": "proactive", "outcome": "said", "sid": "m-1794059165700"}"#)[0]
+    let quiet = ThinkRules.parse(#"{"ts": 1794000000.25, "trig": "stuck", "p": 0.3, "kind": "proactive", "outcome": "quiet"}"#)[0]
+    let chat = ThinkRules.parse(#"{"ts": 1.0, "kind": "chat", "outcome": "said"}"#)[0]
+    check("판단 sid 읽기 · 키", said.sid == "m-1794059165700" && ThinkRules.key(said) == "m-1794059165700" && ThinkRules.key(quiet) == "t1794000000.250")
+    check("라벨은 먼저 말 걸기의 말함·참음만", ThinkRules.labelable(said) && ThinkRules.labelable(quiet) && !ThinkRules.labelable(chat))
+    check("라벨 버튼 글", ThinkRules.labelTitles(said).wrong == "괜히 말했다" && ThinkRules.labelTitles(quiet).wrong == "말했어야 했다")
+    func json(_ o: [String: Any]) -> String { String(data: try! JSONSerialization.data(withJSONObject: o), encoding: .utf8)! }
+    let ll = [json(ThinkRules.labelLine(said, verdict: "wrong", now: 1)), json(ThinkRules.labelLine(quiet, verdict: "right", now: 2)),
+              json(ThinkRules.labelLine(said, verdict: "clear", now: 3)), json(ThinkRules.labelLine(said, verdict: "right", now: 4)),
+              json(ThinkRules.labelLine(quiet, verdict: "clear", now: 5))].joined(separator: "\n")
+    check("라벨: 마지막 것이 이기고 clear 는 지움", ThinkRules.labels(ll) == ["m-1794059165700": "right"], "\(ThinkRules.labels(ll))")
+    check("끈 신호 판단 제목", ThinkRules.title(ThinkRules.parse(#"{"ts": 1.0, "trig": "drift", "kind": "proactive", "outcome": "muted"}"#)[0]) == "딴짓 · 끈 신호")
+}
+
 print(failed == 0 ? "\n모두 통과" : "\n실패 \(failed)건")
 exit(failed == 0 ? 0 : 1)

@@ -9,8 +9,11 @@ import AppKit
 ///  - mind/commands.json  대화로 부를 수 있는 Meowgent 기능 목록 (여기서 쓴다. cat_mind 가 이 id 만 받는다)
 ///  - mind/tasks.json  돌고 있는 코딩 작업 (cat_mind 가 쓴다. 대화창 상태 줄)
 final class MindBridge: NSObject {
-    struct Line { let text: String; let urgent: Bool }
+    /// id·kind: cat_mind 가 쓴 말이면 그 말의 id (decisions.jsonl 의 sid) 와 종류 (chat · say · 신호 이름)
+    struct Line { let text: String; let urgent: Bool; var id: String? = nil; var kind: String? = nil }
     var say: ((Line) -> Void)?
+    /// 대화창을 열었다 (방금 본 말풍선에 답하러 온 것으로 칠 수 있게)
+    var opened: (() -> Void)?
     /// 고양이 재주 (기지개 등). 한도가 다시 채워져 깰 때 쓴다
     var trick: ((String) -> Void)?
     /// 대화로 부를 수 있는 기능 (main 이 채운다). start() 때 mind/commands.json 으로 남긴다
@@ -96,6 +99,7 @@ final class MindBridge: NSObject {
             chat.stopVoice()
         } else if !isOff {
             chat.toggle()
+            if chat.isVisible { opened?() }
         }
     }
 
@@ -110,7 +114,7 @@ final class MindBridge: NSObject {
                 defer { try? FileManager.default.removeItem(at: f) }
                 guard let d = try? Data(contentsOf: f), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                       let text = (o["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { continue }
-                let line = Line(text: text, urgent: o["urgent"] as? Bool ?? false)
+                let line = Line(text: text, urgent: o["urgent"] as? Bool ?? false, id: o["id"] as? String, kind: o["kind"] as? String)
                 DispatchQueue.main.async { self.say?(line) }
             }
             let acts = ((try? FileManager.default.contentsOfDirectory(at: self.dir.appendingPathComponent("act"), includingPropertiesForKeys: nil)) ?? [])
@@ -281,6 +285,7 @@ final class MindBridge: NSObject {
     @objc func talk() {
         guard !isOff else { return }
         chat.show()
+        opened?()
     }
 
     // MARK: 대화창이 읽는 것

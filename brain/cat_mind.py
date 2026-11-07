@@ -810,12 +810,17 @@ class Mind:
         """왜 말했나·참았나·실패했나 (decisions.jsonl). 사용자 말은 넣지 않는다"""
         append_private(self.dir / "decisions.jsonl", {"ts": self.now(), **rec})
 
-    def record(self, job, outcome, took, text=None):
-        """끝난 Codex 일의 결과를 판단 기록에 남긴다 (먼저 말 걸기는 Clef 판단과 함께)"""
+    def record(self, job, outcome, took, text=None, sid=None):
+        """끝난 Codex 일의 결과를 판단 기록에 남긴다 (먼저 말 걸기는 Clef 판단과 함께).
+        sid: 그 말풍선의 id. 앱이 reactions.jsonl 에 같은 id 로 반응(답함·무시·👎·🔇)을 남긴다"""
         rec = {**(job.get("gate") or {}), "kind": job["kind"], "outcome": "timeout" if job.get("timed_out") and outcome == "failed" else outcome,
                "took": round(took, 1)}
+        if job.get("trig"):
+            rec.setdefault("trig", job["trig"])
         if text:
             rec["text"] = clip(text, 160)
+        if sid:
+            rec["sid"] = sid
         self.decide(**rec)
 
     def journal(self, role, text, **extra):
@@ -830,11 +835,22 @@ class Mind:
 
     # 앱으로
     def emit(self, text, urgent=False, kind="say"):
+        """앱 말풍선으로 보낸다. 돌려주는 id 는 말풍선 반응 기록(reactions.jsonl)과 판단 기록의 sid 를 잇는다"""
         ts = self.now()
+        sid = f"m-{int(ts * 1000)}"
         write_private(self.dir / "out" / f"{int(ts * 1000)}.json",
-                      json.dumps({"text": text, "urgent": urgent, "kind": kind, "ts": ts}, ensure_ascii=False))
+                      json.dumps({"text": text, "urgent": urgent, "kind": kind, "ts": ts, "id": sid}, ensure_ascii=False))
         self.st["last_cat"] = ts
         self.journal("cat", text, kind=kind)
+        return sid
+
+    def muted(self, trig):
+        """앱 말풍선 메뉴의 🔇 로 끈 신호인가 (muted.json 의 "mind:<신호>", 다음 아침까지)"""
+        try:
+            until = json.loads((self.data / "muted.json").read_text()).get(f"mind:{trig}", 0)
+        except (OSError, ValueError, AttributeError):
+            return False
+        return isinstance(until, (int, float)) and until > self.now()
 
     def post_ask(self, question, choices, kind="", ttl=86400, multi=False, **extra):
         """inbox/mind-[kind-]<ts>.json: 얼굴 옆 ? 와 대화창 버튼. kind 가 있으면 고양이 질문 수 제한에 안 센다.
@@ -1362,13 +1378,13 @@ class Mind:
             self.post_ask(ask, choices, "chat", 6 * 3600, multi=bool(res.get("multi")), followup=True)
         elif ask and choices and self.open_asks() < self.cfg["ask_open_max"]:
             self.post_ask(ask, choices, multi=bool(res.get("multi")))
-        self.emit(text, urgent=job["kind"] == "chat", kind=job.get("trig") or job["kind"])
+        sid = self.emit(text, urgent=job["kind"] == "chat", kind=job.get("trig") or job["kind"])
         if chat and res.get("actions"):
             self.run_actions(res["actions"], job["text"])
         # 기억은 사용자가 직접 말을 건 때만 남긴다. 먼저 말 걸 때의 입력은 창 제목 같은 남이 정한 글이라 기억을 오염시킬 수 있다
         if res.get("remember") and chat:
             self.mem.add(res["remember"], "기억해 달라고 함")
-        self.record(job, "said", took, text)
+        self.record(job, "said", took, text, sid=sid)
         log(f"고양이 말 ({took:.1f}초): {clip(text, 80)}")
 
     # 대화가 끝나면: 원문은 transcripts/ (AI Archive Hub 가 가져간다), 요약·사실은 기억으로
@@ -1596,6 +1612,10 @@ class Mind:
         if self.idle() > self.cfg["present_idle_s"]:   # 자리에 없거나 맥이 잠깐 깬 때(DarkWake)는 먼저 말 걸지 않는다
             return self.save()
         for trig, key, facts in self.observe(eps):
+            if self.muted(trig):   # 사용자가 끈 신호: Clef·Codex 를 부르지 않고 한 번만 남긴다
+                self.st["seen"][key] = self.now()
+                self.decide(trig=trig, facts=facts, kind="proactive", outcome="muted")
+                continue
             if not self.budget_ok():
                 break
             ctx = self.context(eps)

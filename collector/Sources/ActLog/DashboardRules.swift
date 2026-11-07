@@ -199,20 +199,54 @@ enum ThinkRules {
         let outcome: String     // said · quiet · failed · timeout · limited · retry
         let took: Double?
         let text: String?
+        var sid: String? = nil  // 그 말풍선 id (reactions.jsonl 과 잇는다)
     }
 
     static let triggerKo = ["stuck": "막힘", "back": "돌아옴", "long_focus": "오래 쉬지 않음", "late": "늦은 밤", "drift": "딴짓",
                             "switch": "작업 전환", "notable": "기록할 만한 순간", "curious": "오래 조용함"]
     static let modeKo = ["chat": "가볍게", "judge": "의견", "ask": "질문", "quiet": "가만히"]
-    static let outcomeKo = ["said": "말함", "quiet": "참음", "failed": "실패", "timeout": "시간 초과", "limited": "한도", "retry": "다시 시도"]
+    static let outcomeKo = ["said": "말함", "quiet": "참음", "failed": "실패", "timeout": "시간 초과", "limited": "한도", "retry": "다시 시도",
+                            "muted": "끈 신호"]
 
     static func parse(_ jsonl: String) -> [Decision] {
         jsonl.split(separator: "\n").compactMap { line in
             guard let o = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   let ts = o["ts"] as? Double, let outcome = o["outcome"] as? String else { return nil }
             return Decision(ts: ts, kind: o["kind"] as? String ?? "proactive", trig: o["trig"] as? String, facts: o["facts"] as? String,
-                            p: o["p"] as? Double, mode: o["mode"] as? String, outcome: outcome, took: o["took"] as? Double, text: o["text"] as? String)
+                            p: o["p"] as? Double, mode: o["mode"] as? String, outcome: outcome, took: o["took"] as? Double, text: o["text"] as? String,
+                            sid: o["sid"] as? String)
         }
+    }
+
+    // MARK: 판단 라벨 (생각 탭의 맞다·아니다 → mind/decision_labels.jsonl)
+
+    /// 판단 하나를 가리키는 키: 말풍선 id 가 있으면 그것, 없으면 시각
+    static func key(_ d: Decision) -> String { d.sid ?? String(format: "t%.3f", d.ts) }
+
+    /// 라벨을 받을 판단: 먼저 말 걸기에서 말했거나 참은 것
+    static func labelable(_ d: Decision) -> Bool { d.kind == "proactive" && ["said", "quiet"].contains(d.outcome) }
+
+    /// 버튼 글: 말했으면 "말한 게 맞다 / 괜히 말했다", 참았으면 "참은 게 맞다 / 말했어야 했다"
+    static func labelTitles(_ d: Decision) -> (right: String, wrong: String) {
+        d.outcome == "said" ? ("말한 게 맞다", "괜히 말했다") : ("참은 게 맞다", "말했어야 했다")
+    }
+
+    static func labelLine(_ d: Decision, verdict: String, now: Double) -> [String: Any] {
+        var o: [String: Any] = ["ts": now, "key": key(d), "decision": d.ts, "verdict": verdict, "outcome": d.outcome]
+        if let t = d.trig { o["trig"] = t }
+        if let p = d.p { o["p"] = p }
+        return o
+    }
+
+    /// 라벨 기록 → 키별 마지막 판정 (right · wrong, 지운 건 clear)
+    static func labels(_ jsonl: String) -> [String: String] {
+        var out: [String: String] = [:]
+        for line in jsonl.split(separator: "\n") {
+            guard let o = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let k = o["key"] as? String, let v = o["verdict"] as? String else { continue }
+            out[k] = v == "clear" ? nil : v
+        }
+        return out
     }
 
     /// 목록 제목: "돌아옴 · 가볍게 · 말함" / 사용자가 말 건 건 "말 걸어 옴 · 답함"
