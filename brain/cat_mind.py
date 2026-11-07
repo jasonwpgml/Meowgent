@@ -1124,16 +1124,40 @@ class Mind:
             if self.st["afk_cursor"] is None:   # 처음: 최근 12시간 자리 비움을 다시 훑어 언제부터 쉬지 않았는지 맞춘다
                 self.st["afk_cursor"] = db.execute("SELECT coalesce(min(id),1)-1 FROM events WHERE ts >= ?",
                                                    (self.now() - 12 * 3600,)).fetchone()[0]
-            rows = db.execute("SELECT id, ts, payload FROM events WHERE id > ? AND source='afk' ORDER BY id",
+            elif "last_event_ts" not in self.st:   # 공백을 세기 전 상태: 쉬지 않은 시작점부터 다시 훑어 그 사이 공백을 반영한다 (한 번만)
+                self.st["afk_cursor"] = db.execute("SELECT coalesce(min(id),1)-1 FROM events WHERE ts >= ?",
+                                                   (self.st["active_since"],)).fetchone()[0]
+            # 자리 비움만이 아니라 모든 기록의 시각을 본다: 기록이 끊긴 구간(앱이 꺼졌거나 맥이 잠든 동안)도 쉰 것으로 치려고
+            rows = db.execute("SELECT id, ts, source, payload FROM events WHERE id > ? ORDER BY id",
                               (self.st["afk_cursor"],)).fetchall()
             top = db.execute("SELECT coalesce(max(id),0) FROM events").fetchone()[0]
             db.close()
         except sqlite3.Error as e:
             log(f"actlog.db 읽기 실패: {e}")
             return
-        for _, ts, payload in rows:
-            self.on_afk(ts, read_json_str(payload).get("status") == "afk")
+        for _, ts, source, payload in rows:
+            self.on_gap(self.st.get("last_event_ts"), ts)
+            self.st["last_event_ts"] = ts
+            if source == "afk":
+                self.on_afk(ts, read_json_str(payload).get("status") == "afk")
         self.st["afk_cursor"] = top
+
+    def on_gap(self, prev, ts):
+        """기록이 break_min_s 넘게 끊겼다 다시 이어지면 쉰 것으로 친다.
+        앱이 1분마다 활동·상태를 남기고 3분 손을 놓으면 자리 비움을 찍으니, 아무 기록 없는 5분은 일하지 않은 시간이다
+        (앱이 꺼졌거나 맥이 잠들었거나 꺼진 동안. 2026-11-07 macOS 업데이트로 28시간 끊긴 걸 '27시간 쉬지 않음'으로 셌다)"""
+        if prev is None or self.st["afk"] or ts - prev < self.cfg["break_min_s"]:
+            return
+        self.st["active_since"] = max(self.st["active_since"], ts)
+        if ts - prev >= self.cfg["back_min_s"]:
+            self.st["came_back"] = [ts, ts - prev]
+
+    def on_pause(self, now):
+        """cat_mind 루프가 break_min_s 넘게 멈췄다 깼다 (맥이 잠들었거나 꺼졌다): 그동안은 쉰 것으로 친다"""
+        last = self.st.get("last_tick")
+        self.st["last_tick"] = now
+        if last is not None and now - last >= self.cfg["break_min_s"]:
+            self.st["active_since"] = max(self.st["active_since"], now)
 
     def on_afk(self, ts, away):
         if away and not self.st["afk"]:
@@ -1559,6 +1583,7 @@ class Mind:
     def tick(self):
         off = (self.dir / "off").exists()
         self.heartbeat(off)
+        self.on_pause(self.now())   # 꺼 둔 동안에도 센다 (켤 때 '멈췄다 깸'으로 잘못 보지 않게)
         if self.now() >= self.next_prune:
             self.next_prune = self.now() + 3600
             if hasattr(self.codex, "prune_sessions"):

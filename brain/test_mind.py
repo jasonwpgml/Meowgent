@@ -646,5 +646,48 @@ check("끈 기한이 지나면 다시 말함", len(m.codex.started) == 1)
 (data / "muted.json").write_text("깨진 파일")
 check("muted.json 이 깨져도 안 끈 것으로", m.muted("stuck") is False)
 
+# 오래 쉬지 않음: 기록이 끊긴 구간·루프가 멈춘 동안도 쉰 것으로 (2026-11-07 macOS 업데이트로 28시간 끊긴 걸 '27시간 쉬지 않음'으로 셈)
+m, clock, data = make(T0)
+m.cfg["late_hours"] = [0, 0]
+db = sqlite3.connect(data / "actlog.db")
+db.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, ts REAL, source TEXT, payload TEXT)")
+rows = [(T0 - 7200 + 60 * i, "health", "{}") for i in range(30)]          # 2시간 전부터 30분 일함
+rows += [(T0 - 600 + 60 * i, "activity", "{}") for i in range(10)]        # 80분 끊겼다가 최근 10분 다시
+db.executemany("INSERT INTO events(ts, source, payload) VALUES(?,?,?)", rows)
+db.commit()
+m.st["active_since"] = T0 - 7200
+m.read_afk()
+check("기록이 80분 끊겼다 이어지면 그때부터 다시 셈", m.st["active_since"] == T0 - 600, m.st["active_since"] - T0)
+check("오래 끊겼다 이어지면 돌아옴", m.st["came_back"] and m.st["came_back"][0] == T0 - 600, m.st.get("came_back"))
+check("그래서 오래 쉬지 않음 아님", "long_focus" not in [s[0] for s in m.observe([])])
+db.executemany("INSERT INTO events(ts, source, payload) VALUES(?,?,?)", [(T0 + 60 * i, "activity", "{}") for i in range(1, 4)])
+db.commit()
+m.read_afk()
+check("1분 간격 기록은 쉰 것 아님", m.st["active_since"] == T0 - 600)
+m.st["afk"], m.st["afk_since"] = True, T0 + 200
+db.execute("INSERT INTO events(ts, source, payload) VALUES(?,?,?)", (T0 + 1200, "afk", json.dumps({"status": "active"})))
+db.commit()
+m.read_afk()
+check("자리 비움 중 끊긴 건 자리 비움 쪽에서 셈", m.st["active_since"] == T0 + 1200 and not m.st["afk"], m.st["active_since"] - T0)
+db.close()
+
+m, clock, data = make(T0)
+db = sqlite3.connect(data / "actlog.db")
+db.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, ts REAL, source TEXT, payload TEXT)")
+db.executemany("INSERT INTO events(ts, source, payload) VALUES(?,?,?)",
+               [(T0 - 30 * 3600, "health", "{}"), (T0 - 120, "lifecycle", "{}"), (T0 - 60, "activity", "{}")])
+db.commit(); db.close()
+m.st.update(active_since=T0 - 30 * 3600 - 10, afk_cursor=2)    # 예전 상태: 커서는 이미 공백 뒤, last_event_ts 없음
+m.read_afk()
+check("예전 상태면 쉬지 않은 시작점부터 다시 훑어 공백 반영", m.st["active_since"] == T0 - 120 and m.st["afk_cursor"] == 3, (m.st["active_since"] - T0, m.st["afk_cursor"]))
+
+m, clock, data = make(T0)
+m.on_pause(T0)
+m.st["active_since"] = T0 - 3000
+m.on_pause(T0 + 5)
+check("루프가 잠깐 쉬면 그대로", m.st["active_since"] == T0 - 3000)
+m.on_pause(T0 + 5 + 3600)
+check("루프가 한 시간 멈췄다 깨면(맥 잠자기) 다시 셈", m.st["active_since"] == T0 + 5 + 3600)
+
 print("\n" + ("모두 통과" if not failed else f"{failed}개 실패"))
 sys.exit(1 if failed else 0)
