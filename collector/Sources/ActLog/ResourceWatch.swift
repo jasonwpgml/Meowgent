@@ -25,6 +25,8 @@ final class ResourceWatch: NSObject {
     private(set) var latest: Resource.Sample?
     private(set) var history: [Resource.Sample] = []
     private(set) var active: [Resource.Alert] = []
+    /// 지금 열려 있는 메뉴의 맥 상태 카드 (새로 읽을 때마다 다시 그린다)
+    weak var card: ResourceCard?
 
     static let interval: TimeInterval = 10
     static let fastInterval: TimeInterval = 2
@@ -80,6 +82,9 @@ final class ResourceWatch: NSObject {
         timer = t
     }
 
+    /// 메뉴가 열린 동안 카드가 부른다 (10초를 기다리지 않고 바로 새로 읽기)
+    func pollNow() { poll() }
+
     private func poll() {
         let front = NSWorkspace.shared.frontmostApplication.map { ($0.bundleURL?.path, $0.processIdentifier) }
         queue.async { [weak self] in
@@ -98,6 +103,7 @@ final class ResourceWatch: NSObject {
         active = tracker.held(alerts, now: s.at)
         cleaner.observe(s, canAsk: alertsOn)
         dashboard.refresh()
+        card?.update()
         guard alertsOn else { return }
         if s.at.timeIntervalSince(lastCalmNotice) < Self.calmGap { due = due.filter(\.urgent) }
         guard let a = due.first else { return }
@@ -125,20 +131,18 @@ final class ResourceWatch: NSObject {
     /// 고양이에 마우스를 올렸을 때 붙일 것: 지금 이어지고 있는 문제만
     var attention: String { active.map(\.short).joined(separator: "\n") }
 
+    /// 메뉴 맨 위: 막대로 그린 맥 상태 카드 (누르면 대시보드)
+    func addCard(to menu: NSMenu) {
+        let item = NSMenuItem()
+        item.view = ResourceCard(watch: self)
+        menu.addItem(item)
+        menu.addItem(.separator())
+    }
+
+    /// 맥 상태 설정·도구 (숫자는 맨 위 카드가 보여 준다)
     func addMenuItems(to menu: NSMenu) {
-        let top = NSMenuItem(title: "🖥️ 맥 상태", action: nil, keyEquivalent: "")
+        let top = NSMenuItem(title: "🖥️ 맥 상태 설정", action: nil, keyEquivalent: "")
         let sub = NSMenu()
-        func info(_ t: String) { let i = NSMenuItem(title: t, action: nil, keyEquivalent: ""); i.isEnabled = false; sub.addItem(i) }
-        if let s = latest {
-            info("CPU \(Int(s.cpu))% · 메모리 \(Int(s.memUsed))% (\(Resource.pressureName[min(s.pressure, 2)])) · 발열 \(Resource.thermalName[min(s.thermal, 3)])")
-            if let b = s.battery { info(ResourceDashboard.batteryLine(b, watts: s.watts)) }
-            if let g = s.gpu { info("GPU \(Int(g))%") }
-            if let o = s.own { info("묘전트 CPU \(String(format: "%.1f", o.cpu))% · 메모리 \(Resource.bytes(o.memBytes))") }
-        } else {
-            info("아직 읽는 중이다냥")
-        }
-        for a in active { info(a.short) }
-        sub.addItem(.separator())
         sub.addItem("📊 대시보드 열기", #selector(openDashboard), target: self)
         sub.addItem("활성 상태 보기 열기", #selector(openActivityMonitor), target: self)
         sub.addItem(.separator())
@@ -240,6 +244,8 @@ private final class Sampler {
     var dataDir: URL?
     private var dataBytes: UInt64?
     private var dataMeasuredAt: TimeInterval = -.infinity
+    private var disk: Resource.Disk?
+    private var diskAt: TimeInterval = -.infinity
     private var net: Resource.OwnNet?
     private var netIn: UInt64 = 0, netOut: UInt64 = 0
     private var netBatches = 0
@@ -289,12 +295,21 @@ private final class Sampler {
 
         let own = ownUsage(procs, dt: dt, now: now)
         let bat = battery()
+        if now - diskAt >= 60 { disk = Self.startupDisk() ?? disk; diskAt = now }
         return Resource.Sample(at: Date(), cpu: cpu, cores: ProcessInfo.processInfo.activeProcessorCount,
                                apps: keep.values.sorted { $0.cpu > $1.cpu }, memUsed: 100 - Double(sysctlInt("kern.memorystatus_level") ?? 100),
                                pressure: [1: 0, 2: 1, 4: 2][sysctlInt("kern.memorystatus_vm_pressure_level") ?? 1] ?? 0,
                                swapBytes: swapUsed(), thermal: ProcessInfo.processInfo.thermalState.rawValue,
                                battery: bat, watts: bat?.onBattery == true ? batteryWatts() : nil, gpu: discreteGPU(),
-                               everyApp: apps, own: own)
+                               everyApp: apps, own: own, disk: disk)
+    }
+
+    /// 시동 디스크 전체·사용 가능 용량 (Finder 의 '사용 가능'과 같은 값)
+    static func startupDisk() -> Resource.Disk? {
+        let keys: Set<URLResourceKey> = [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey]
+        guard let v = try? URL(fileURLWithPath: "/").resourceValues(forKeys: keys),
+              let total = v.volumeTotalCapacity, total > 0, let free = v.volumeAvailableCapacityForImportantUsage else { return nil }
+        return Resource.Disk(total: UInt64(total), free: UInt64(max(free, 0)))
     }
 
     // MARK: 묘전트 자신

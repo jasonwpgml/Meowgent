@@ -614,5 +614,19 @@ do {
     check("끈 신호 판단 제목", ThinkRules.title(ThinkRules.parse(#"{"ts": 1.0, "trig": "drift", "kind": "proactive", "outcome": "muted"}"#)[0]) == "딴짓 · 끈 신호")
 }
 
+// MARK: 저장공간
+do {
+    let tb: UInt64 = 1_000_000_000_000
+    check("저장공간 넉넉", Resource.diskLevel(.init(total: tb, free: 300_000_000_000)) == 0)
+    check("저장공간 빠듯 (10% 밑)", Resource.diskLevel(.init(total: tb, free: 80_000_000_000)) == 1)
+    check("저장공간 심각 (10GB 밑)", Resource.diskLevel(.init(total: tb, free: 8_000_000_000)) == 2)
+    check("작은 디스크는 25GB 밑이면 빠듯", Resource.diskLevel(.init(total: 256_000_000_000, free: 20_000_000_000)) == 1)
+    check("저장공간 단위 (1000 단위)", Resource.diskSize(tb) == "1TB" && Resource.diskSize(1_500_000_000_000) == "1.5TB"
+          && Resource.diskSize(188_400_000_000) == "188GB" && Resource.diskSize(4_260_000_000) == "4.3GB",
+          [Resource.diskSize(tb), Resource.diskSize(1_500_000_000_000), Resource.diskSize(188_400_000_000), Resource.diskSize(4_260_000_000)].joined(separator: " "))
+    let d = Resource.Disk(total: 500, free: 600)
+    check("남은 게 전체보다 크게 읽혀도 사용량은 0", d.used == 0 && d.usedFraction == 0)
+}
+
 print(failed == 0 ? "\n모두 통과" : "\n실패 \(failed)건")
 exit(failed == 0 ? 0 : 1)

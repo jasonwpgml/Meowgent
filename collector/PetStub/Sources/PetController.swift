@@ -6,6 +6,10 @@ import AppKit
 final class PetController: NSObject {
     var agentSummary: () -> String = { "" }
     var extraMenu: ((NSMenu) -> Void)?
+    /// 메뉴 맨 위에 붙일 것 (맥 상태 카드)
+    var topMenu: ((NSMenu) -> Void)?
+    /// 메뉴에 띄울 요약 (없으면 agentSummary)
+    var menuSummary: (() -> String)?
     var hasToys: Bool { false }
     var isPaused: () -> Bool = { false }
     var setPaused: (Bool) -> Void = { _ in }

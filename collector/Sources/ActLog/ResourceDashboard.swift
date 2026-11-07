@@ -8,7 +8,7 @@ struct NoticeDetail {
     let hide: () -> Void
 }
 
-/// 맥 상태 대시보드: 알림이 왜 떴는지 + CPU·메모리·발열·에너지(·GPU) 막대와 최근 10분 선 + 많이 쓰는 앱.
+/// 맥 상태 대시보드: 알림이 왜 떴는지 + CPU·메모리·저장공간·발열·에너지(·GPU) 막대와 최근 10분 선 + 많이 쓰는 앱.
 /// 미리보기는 마우스가 말풍선이나 이 창 위에 있는 동안만 떠 있고, 누르면 고정된다. 고정은 ×·Esc·바깥 클릭으로 닫는다.
 final class ResourceDashboard: NSObject {
     private unowned let watch: ResourceWatch
@@ -23,7 +23,7 @@ final class ResourceDashboard: NSObject {
     private let focusBox = NSView()
     private let focusLabel = NSTextField(wrappingLabelWithString: "")
     private let ignoreButton = NSButton(title: "", target: nil, action: nil)
-    private let rows = (cpu: MetricRow("CPU"), memory: MetricRow("메모리"), thermal: MetricRow("발열"),
+    private let rows = (cpu: MetricRow("CPU"), memory: MetricRow("메모리"), disk: MetricRow("저장공간"), thermal: MetricRow("발열"),
                         energy: MetricRow("에너지"), gpu: MetricRow("GPU"))
     private let appsTitle = NSTextField(labelWithString: "")
     private var appRows: [AppRow] = []
@@ -149,6 +149,11 @@ final class ResourceDashboard: NSObject {
         rows.memory.set(value: "\(Int(s.memUsed))%", fraction: s.memUsed / 100, level: s.pressure,
                         detail: "압박 \(Resource.pressureName[min(s.pressure, 2)]) · 스왑 \(Resource.bytes(s.swapBytes))",
                         spark: hist.map(\.memUsed), sparkMax: 100, focused: kind == .memory)
+        rows.disk.isHidden = s.disk == nil
+        if let d = s.disk {
+            rows.disk.set(value: "\(Resource.diskSize(d.free)) 남음", fraction: d.usedFraction, level: Resource.diskLevel(d),
+                          detail: "전체 \(Resource.diskSize(d.total)) 중 \(Resource.diskSize(d.used)) 사용", spark: [], sparkMax: 1, focused: false)
+        }
         let th = min(s.thermal, 3)
         rows.thermal.set(value: Resource.thermalName[th], fraction: Double(th + 1) / 4, level: th >= 3 ? 2 : (th == 2 ? 1 : 0),
                          detail: th >= 2 ? "macOS가 속도를 낮추는 중" : "괜찮다냥", spark: hist.map { Double($0.thermal) }, sparkMax: 3,
@@ -334,7 +339,7 @@ final class ResourceDashboard: NSObject {
         let ownHead = NSStackView(views: [ownTitle, NSView(), ownCount])
         let ownRows: [NSView] = [own.cpu, own.memory, own.diskNow, own.diskTotal, own.netNow, own.netTotal, own.data] + ownParts
 
-        let views: [NSView] = [header, focusBox, ignoreButton, buildCleanBox(), rows.cpu, rows.memory, rows.thermal, rows.energy, rows.gpu,
+        let views: [NSView] = [header, focusBox, ignoreButton, buildCleanBox(), rows.cpu, rows.memory, rows.disk, rows.thermal, rows.energy, rows.gpu,
                                Self.separator(), appsTitle, colHead] + appRows + [Self.separator(), ownHead] + ownRows + [footer]
         let stack = NSStackView(views: views)
         stack.orientation = .vertical

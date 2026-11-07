@@ -182,8 +182,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if s.blocked { return app }
             return s.window.map { "\(app) — \(String($0.prefix(40)))" } ?? app
         }
+        p.topMenu = { [weak self] m in self?.resources.addCard(to: m) }
         p.agentSummary = { [weak self] in
             [self?.agents.summary ?? "", self?.quota.attention ?? "", self?.resources.attention ?? "",
+             self?.mind.isOff == false ? self?.mind.quotaLine ?? "" : ""]
+                .filter { !$0.isEmpty }.joined(separator: "\n")
+        }
+        // 메뉴에서는 맥 상태 줄을 빼고 (맨 위 카드가 보여 준다)
+        p.menuSummary = { [weak self] in
+            [self?.agents.summary ?? "", self?.quota.attention ?? "",
              self?.mind.isOff == false ? self?.mind.quotaLine ?? "" : ""]
                 .filter { !$0.isEmpty }.joined(separator: "\n")
         }
@@ -307,6 +314,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        resources.addCard(to: menu)
         let s = Context.shared.snapshot
         let ax = AXIsProcessTrusted(), input = CGPreflightListenEventAccess()
         func info(_ t: String) { let i = NSMenuItem(title: t, action: nil, keyEquivalent: ""); i.isEnabled = false; menu.addItem(i) }

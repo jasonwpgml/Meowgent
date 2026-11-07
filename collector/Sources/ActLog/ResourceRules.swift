@@ -39,6 +39,35 @@ enum Resource {
         var gpu: Double?              // 따로 단 GPU 가 있을 때만 0~100 (Apple 칩 내장 GPU 는 안 본다)
         var everyApp: [String: App] = [:]   // apps 는 상위 몇 개뿐이라, 정리 판단은 이걸 본다
         var own: Own? = nil
+        var disk: Disk? = nil               // 시동 디스크 (1분에 한 번 읽는다)
+    }
+
+    // MARK: 저장공간
+
+    /// 시동 디스크. free 는 Finder·시스템 설정의 '사용 가능'과 같은 값 (지울 수 있는 캐시 포함)
+    struct Disk: Equatable {
+        var total: UInt64
+        var free: UInt64
+        var used: UInt64 { total > free ? total - free : 0 }
+        var usedFraction: Double { total > 0 ? Double(used) / Double(total) : 0 }
+    }
+
+    /// 0 넉넉 · 1 빠듯 (10% 또는 25GB 밑) · 2 심각 (5% 또는 10GB 밑)
+    static func diskLevel(_ d: Disk) -> Int {
+        let left = d.total > 0 ? Double(d.free) / Double(d.total) : 1
+        if left < 0.05 || d.free < 10_000_000_000 { return 2 }
+        if left < 0.10 || d.free < 25_000_000_000 { return 1 }
+        return 0
+    }
+
+    /// 저장공간은 Finder·시스템 설정처럼 1000 단위로 적는다 (1TB = 1000GB)
+    static func diskSize(_ b: UInt64) -> String {
+        let gb = Double(b) / 1e9
+        if gb >= 1000 {
+            let tb = gb / 1000
+            return tb >= 10 || abs(tb - tb.rounded()) < 0.05 ? "\(Int(tb.rounded()))TB" : String(format: "%.1fTB", tb)
+        }
+        return gb >= 10 ? "\(Int(gb.rounded()))GB" : String(format: "%.1fGB", gb)
     }
 
     // MARK: 묘전트 자신
