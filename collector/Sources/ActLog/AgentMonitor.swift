@@ -21,8 +21,11 @@ final class AgentMonitor {
     private var doneFlush: DispatchWorkItem?
     /// 끝남을 모으는 시간 (phrases.json 의 done.window_s)
     static var doneWindow: TimeInterval { PhraseTable.current.param("done.window_s") }
+    /// 이번 훑기에서 본 대화 줄 → 컨텍스트 % (hot 고르기용, 감시 큐에서만)
+    private var contextPct: [String: Int] = [:]
     private var lastDone: [String: String] = [:]          // 세션별 마지막 "끝남" 표시 (중복 방지)
     private(set) var summary = ""                         // 메뉴·말풍선용 한 줄 요약
+    private(set) var hot = ""                             // 그중 컨텍스트가 높은 것(context.high_pct 넘음)만: 고양이 메뉴 맨 위에
     private(set) var codexWindows: [Quota.Window] = []    // 세션 기록의 Codex 한도 (5시간·주간)
 
     func start() {
@@ -36,10 +39,13 @@ final class AgentMonitor {
         let front = frontBundle()
         queue.async { [weak self] in
             guard let self else { return }
+            self.contextPct = [:]
             var lines: [String] = []
             if let s = self.checkCodex(front: front) { lines.append(s) }
             if let s = self.checkClaude(front: front) { lines.append(s) }
-            DispatchQueue.main.async { self.summary = lines.joined(separator: "\n") }
+            let high = Int(PhraseTable.current.param("context.high_pct"))
+            let hot = self.contextPct.filter { $0.value >= high }.map(\.key).sorted()
+            DispatchQueue.main.async { self.summary = lines.joined(separator: "\n"); self.hot = hot.joined(separator: "\n") }
         }
     }
 
@@ -132,7 +138,10 @@ final class AgentMonitor {
                 let fresh = Date().timeIntervalSince(mod) < 30
                 if !first && !inCodex && fresh { queueDone(.init(agent: "Codex", name: name)) }
             }
-            if let c = st.ctxPct, lines.count < 3 { lines.append("Codex ‘\(name)’: 컨텍스트 \(c)%") }
+            if let c = st.ctxPct {
+                contextPct["⚠︎ Codex ‘\(name)’ 컨텍스트 \(c)%"] = c
+                if lines.count < 3 { lines.append("Codex ‘\(name)’: 컨텍스트 \(c)%") }
+            }
         }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
@@ -200,6 +209,7 @@ final class AgentMonitor {
             if let c = st.ctx {
                 let pct = c * 100 / claudeWindow(model: st.model, used: c, session: id)
                 warnContext(session: "claude:" + id, agent: "Claude ‘\(name)’", pct: pct)
+                contextPct["⚠︎ Claude ‘\(name)’ 컨텍스트 \(pct)%"] = pct
                 if lines.count < 3 { lines.append("Claude ‘\(name)’: 컨텍스트 \(pct)% (\(c / 1000)k)") }
             }
             if let d = st.doneKey, lastDone["claude:" + id] != d {

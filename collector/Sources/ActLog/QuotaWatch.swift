@@ -117,9 +117,8 @@ final class QuotaWatch: NSObject {
         return Quota.summaryLines(windows: ws, credits: cs, now: now, cal: cal).joined(separator: "\n")
     }
 
-    func addMenuItems(to menu: NSMenu) {
-        let top = NSMenuItem(title: "⏳ 한도·리셋권", action: nil, keyEquivalent: "")
-        let sub = NSMenu()
+    /// 한도 줄 + 오늘 챙길 것 · 리셋권 · 알림 설정 (🤖 에이전트·한도 하위 메뉴 안에)
+    func fillMenu(_ sub: NSMenu) {
         let lines = Quota.summaryLines(windows: windows, credits: credits, now: Date(), cal: cal)
         if lines.isEmpty {
             let i = NSMenuItem(title: "읽은 값 없다 (CodexBar부터 켜 둬)", action: nil, keyEquivalent: ""); i.isEnabled = false; sub.addItem(i)
@@ -151,8 +150,6 @@ final class QuotaWatch: NSObject {
         }
         who.submenu = wm
         sub.addItem(who)
-        top.submenu = sub
-        menu.addItem(top)
     }
 
     @objc private func showDigest() {

@@ -272,14 +272,21 @@ final class MindBridge: NSObject {
 
     // MARK: 메뉴
 
-    /// withQuota: 한도 줄도 넣는다 (고양이 클릭 메뉴는 agentSummary 로 이미 보여 주므로 false)
-    func addMenuItems(to menu: NSMenu, withQuota: Bool = false) {
-        if withQuota, !isOff, let q = quotaLine {
-            let i = NSMenuItem(title: "🔋 " + q, action: nil, keyEquivalent: ""); i.isEnabled = false; menu.addItem(i)
-        }
+    /// 💬 말 걸기 (말하는 고양이가 켜져 있을 때만)
+    func addTalkItem(to menu: NSMenu) {
         if !isOff { menu.addItem("💬 고양이한테 말 걸기 (\(Self.hotKeyName))", #selector(talk), target: self) }
+    }
+
+    /// 🧠 말하는 고양이 켜고 끄기 (메뉴 막대 › 🐈 고양이 설정)
+    func addToggle(to menu: NSMenu) {
         let t = menu.addItem("🧠 말하는 고양이 (Codex)", #selector(toggle), target: self)
         t.state = isOff ? .off : .on
+    }
+
+    /// 🔋 Codex 한도 한 줄 (🤖 에이전트·한도)
+    func addQuotaLine(to menu: NSMenu) {
+        guard !isOff, let q = quotaLine else { return }
+        let i = NSMenuItem(title: "🔋 " + q, action: nil, keyEquivalent: ""); i.isEnabled = false; menu.addItem(i)
     }
 
     @objc func talk() {

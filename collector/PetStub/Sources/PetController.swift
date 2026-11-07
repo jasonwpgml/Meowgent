@@ -8,6 +8,7 @@ final class PetController: NSObject {
     var extraMenu: ((NSMenu) -> Void)?
     /// 메뉴 맨 위에 붙일 것 (맥 상태 카드)
     var topMenu: ((NSMenu) -> Void)?
+    var actionMenu: ((NSMenu) -> Void)?
     /// 메뉴에 띄울 요약 (없으면 agentSummary)
     var menuSummary: (() -> String)?
     var hasToys: Bool { false }
@@ -31,4 +32,5 @@ final class PetController: NSObject {
     func keyHint(_ keys: String, _ title: String) -> Bool { false }
     func trick(_ name: String) {}
     func toggleHidden() {}
+    func fillSettings(_ menu: NSMenu) {}
 }

@@ -188,19 +188,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
              self?.mind.isOff == false ? self?.mind.quotaLine ?? "" : ""]
                 .filter { !$0.isEmpty }.joined(separator: "\n")
         }
-        // 메뉴에서는 맥 상태 줄을 빼고 (맨 위 카드가 보여 준다)
+        // 고양이 메뉴 맨 위에는 손이 가야 하는 것만: 컨텍스트가 높은 대화 · 한도 임박 (맥 상태는 카드가 보여 준다)
         p.menuSummary = { [weak self] in
-            [self?.agents.summary ?? "", self?.quota.attention ?? "",
-             self?.mind.isOff == false ? self?.mind.quotaLine ?? "" : ""]
-                .filter { !$0.isEmpty }.joined(separator: "\n")
+            [self?.agents.hot ?? "", self?.quota.attention ?? ""].filter { !$0.isEmpty }.joined(separator: "\n")
         }
+        p.actionMenu = { [weak self] m in self?.mind.addTalkItem(to: m) }
         p.extraMenu = { [weak self] m in
             self?.dashboard.addMenuItems(to: m)
-            self?.mind.addMenuItems(to: m)
-            self?.quota.addMenuItems(to: m)
-            self?.resources.addMenuItems(to: m)
-            self?.shortcuts.addMenuItems(to: m)
-            self?.launcher.addMenuItems(to: m)
+            self?.addAgentsMenu(to: m)
         }
         shortcuts.show = { [weak p] h in p?.keyHint(h.keys, h.title) ?? false }
         // 숫자만 다른 같은 알림은 잠깐 다시 말하지 않는다 (NoticeBatch.Gate). 고양이 대화 답은 거르지 않는다
@@ -312,6 +307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         button.toolTip = tip
     }
 
+    /// 메뉴 막대 메뉴: 맥 상태 카드 → 기록 상태 → 자주 쓰는 것 → 설정 묶음 → 앱
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         resources.addCard(to: menu)
@@ -319,37 +315,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let ax = AXIsProcessTrusted(), input = CGPreflightListenEventAccess()
         func info(_ t: String) { let i = NSMenuItem(title: t, action: nil, keyEquivalent: ""); i.isEnabled = false; menu.addItem(i) }
 
-        info(s.paused ? (recordingEnabled ? "⏸ 일시정지 중" : "○ 고양이만 (활동 기록 꺼짐)") : "● 활동 기록 중")
-        info("손쉬운 사용: \(ax ? "허용됨" : "필요")  ·  입력 모니터링: \(input ? "허용됨" : "필요")")
+        let state = s.paused ? (recordingEnabled ? "⏸ 일시정지 중" : "○ 고양이만 (활동 기록 꺼짐)") : "● 활동 기록 중"
+        info("\(state) · 이번 실행 \(store.written)건 · DB \(ByteCountFormatter.string(fromByteCount: store.sizeBytes, countStyle: .file))")
+        if !ax { menu.addItem("⚠︎ 손쉬운 사용 권한 필요 — 열기…", #selector(openAXSettings), target: self) }
+        if !input { menu.addItem("⚠︎ 입력 모니터링 권한 필요 — 열기…", #selector(openInputSettings), target: self) }
         if IsSecureEventInputEnabled() { info("⚠︎ 다른 앱이 보안 입력 사용 중 (키 횟수 수집 중단)") }
-        info("이번 실행 \(store.written)건 기록 · DB \(ByteCountFormatter.string(fromByteCount: store.sizeBytes, countStyle: .file))")
         forward.addMenuItems(to: menu)
         menu.addItem(.separator())
-        dashboard.addMenuItems(to: menu)
 
+        dashboard.addMenuItems(to: menu)
+        if pet != nil { mind.addTalkItem(to: menu) }
         if s.paused {
-            menu.addItem(recordingEnabled ? "다시 기록" : "활동 기록 켜기", #selector(resume), target: self)
+            menu.addItem(recordingEnabled ? "▶︎ 다시 기록" : "▶︎ 활동 기록 켜기", #selector(resume), target: self)
         } else {
-            menu.addItem("15분 일시정지", #selector(pause15), target: self)
-            menu.addItem("1시간 일시정지", #selector(pause60), target: self)
-            menu.addItem("활동 기록 끄기 (고양이만)", #selector(pauseManual), target: self)
+            let p = NSMenuItem(title: "⏸ 기록 멈추기", action: nil, keyEquivalent: "")
+            let pm = NSMenu()
+            pm.addItem("15분", #selector(pause15), target: self)
+            pm.addItem("1시간", #selector(pause60), target: self)
+            pm.addItem("끄기 (고양이만, 다시 켤 때까지)", #selector(pauseManual), target: self)
+            p.submenu = pm
+            menu.addItem(p)
         }
         menu.addItem(.separator())
-        if !ax { menu.addItem("손쉬운 사용 권한 열기…", #selector(openAXSettings), target: self) }
-        if !input { menu.addItem("입력 모니터링 권한 열기…", #selector(openInputSettings), target: self) }
-        menu.addItem(pet?.isHidden == false ? "고양이 숨기기" : "고양이 보이기", #selector(togglePet), target: self)
-        if pet != nil { mind.addMenuItems(to: menu, withQuota: true) }
+
+        if let pet {
+            menu.addItem(pet.isHidden ? "🐈 고양이 보이기" : "🐈 고양이 숨기기", #selector(togglePet), target: self)
+            if pet.hasToys { menu.addItem("🧺 고양이 장난감 치우기", #selector(putToysAway), target: self) }
+            let set = NSMenuItem(title: "🐈 고양이 설정", action: nil, keyEquivalent: "")
+            let sm = NSMenu()
+            pet.fillSettings(sm)
+            if sm.numberOfItems > 0 { sm.addItem(.separator()) }
+            mind.addToggle(to: sm)
+            set.submenu = sm
+            menu.addItem(set)
+        }
+        addAgentsMenu(to: menu)
         resources.addMenuItems(to: menu)
+        shortcuts.addMenuItems(to: menu)
         launcher.addMenuItems(to: menu)
-        if pet?.hasToys == true { menu.addItem("🧺 고양이 장난감 치우기", #selector(putToysAway), target: self) }
-        menu.addItem("데이터 폴더 열기", #selector(openData), target: self)
-        menu.addItem("설정 파일(config.json) 열기", #selector(openConfig), target: self)
-        let login = menu.addItem("로그인 시 자동 실행 · 꺼지면 다시 켜기", #selector(toggleLogin), target: self)
-        login.state = agent.isInstalled ? .on : .off
         menu.addItem(.separator())
-        menu.addItem("Meowgent 정보…", #selector(showAbout), target: self)
-        menu.addItem("Meowgent 다시 시작", #selector(relaunch), target: self)
+
+        let adv = NSMenuItem(title: "🛠 Meowgent", action: nil, keyEquivalent: "")
+        let am = NSMenu()
+        am.addItem("데이터 폴더 열기", #selector(openData), target: self)
+        am.addItem("설정 파일(config.json) 열기", #selector(openConfig), target: self)
+        am.addItem("로그인 시 자동 실행 · 꺼지면 다시 켜기", #selector(toggleLogin), target: self).state = agent.isInstalled ? .on : .off
+        am.addItem(.separator())
+        am.addItem("Meowgent 정보…", #selector(showAbout), target: self)
+        am.addItem("Meowgent 다시 시작", #selector(relaunch), target: self)
+        adv.submenu = am
+        menu.addItem(adv)
         menu.addItem("Meowgent 종료", #selector(quit), target: self)
+    }
+
+    /// 🤖 에이전트·한도: 최근 대화마다 컨텍스트 + Codex 한도 + 한도·리셋권 (고양이 메뉴와 메뉴 막대 둘 다)
+    func addAgentsMenu(to menu: NSMenu) {
+        let top = NSMenuItem(title: agents.hot.isEmpty ? "🤖 에이전트·한도" : "🤖 에이전트·한도 ⚠︎", action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+        func info(_ t: String) { let i = NSMenuItem(title: t, action: nil, keyEquivalent: ""); i.isEnabled = false; sub.addItem(i) }
+        let lines = agents.summary.split(separator: "\n")
+        if lines.isEmpty { info("최근 30분 안에 움직인 대화 없다냥") }
+        for l in lines { info(String(l)) }
+        mind.addQuotaLine(to: sub)
+        sub.addItem(.separator())
+        quota.fillMenu(sub)
+        top.submenu = sub
+        menu.addItem(top)
     }
 
     func pause(minutes: Double?) {
