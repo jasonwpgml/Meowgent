@@ -281,6 +281,18 @@ do {
     _ = tr.due([], now: base + 4000)
     _ = tr.due(hog, now: base + 4000)
     check("1시간 지나면 다시", tr.due(hog, now: base + 4200).count == 1)
+    // 메모리 빠듯: 5분 이어져야, 한 번 말하면 6시간 쉼
+    var mt = Resource.Tracker()
+    let tight = Resource.alerts(sample([], pressure: 1))
+    _ = mt.due(tight, now: base)
+    check("메모리 빠듯은 5분 기다림", mt.due(tight, now: base + 120).isEmpty && mt.due(tight, now: base + 300).count == 1)
+    mt.markFired("memory:tight", now: base + 300)
+    _ = mt.due([], now: base + 400)
+    _ = mt.due(tight, now: base + 4000)
+    check("메모리 빠듯은 1시간 지나도 안 함", mt.due(tight, now: base + 4400).isEmpty)
+    _ = mt.due([], now: base + 22000)
+    _ = mt.due(tight, now: base + 22000)
+    check("6시간 지나면 다시", mt.due(tight, now: base + 22400).count == 1)
     check("글자", Resource.duration(130) == "2시간 10분" && Resource.duration(45) == "45분"
           && Resource.bytes(3_221_225_472) == "3.0GB" && Resource.cores(130) == "1.3")
 }
@@ -626,6 +638,16 @@ do {
           [Resource.diskSize(tb), Resource.diskSize(1_500_000_000_000), Resource.diskSize(188_400_000_000), Resource.diskSize(4_260_000_000)].joined(separator: " "))
     let d = Resource.Disk(total: 500, free: 600)
     check("남은 게 전체보다 크게 읽혀도 사용량은 0", d.used == 0 && d.usedFraction == 0)
+}
+
+// MARK: 행동 창
+do {
+    check("행동: 그 앱으로 감", ReactionRules.matches(.app(["com.anthropic.claudefordesktop"]), .app("com.anthropic.claudefordesktop")))
+    check("행동: 다른 앱은 아님", !ReactionRules.matches(.app(["com.openai.codex"]), .app("com.google.Chrome")))
+    check("행동: 자리 비움", ReactionRules.matches(.away, .away) && !ReactionRules.matches(.away, .app("x")) && !ReactionRules.matches(.app(["x"]), .away))
+    check("눌러서 엶은 손댐, 관련 행동은 읽기보다 강함", ReactionRules.touches("opened")
+          && ReactionRules.summary(["shown", "ignored", "acted"]) == "acted" && ReactionRules.summary(["shown", "opened", "acted"]) == "opened")
+    check("끝남 짧은 답 기준 기본 90초", PhraseTable.defaults.param("done.min_turn_s") == 90)
 }
 
 print(failed == 0 ? "\n모두 통과" : "\n실패 \(failed)건")

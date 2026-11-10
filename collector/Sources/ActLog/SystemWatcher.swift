@@ -10,6 +10,8 @@ final class SystemWatcher {
     private var secureOn = false
     private var lastPasteboard = NSPasteboard.general.changeCount
     var health: [String: Any] = [:]
+    /// 자리를 비웠을 때 (잠금·잠자기·입력 없음) — 말풍선 반응의 '관련 행동' 판정에 쓴다
+    var onAway: (() -> Void)?
 
     init(store: Store, tap: InputTap) {
         self.store = store
@@ -47,7 +49,7 @@ final class SystemWatcher {
 
     private func system(_ what: String) {
         store.write(Event("afk", payload: ["event": what, "status": (what == "lock" || what == "sleep") ? "afk" : "active"]))
-        if what == "lock" || what == "sleep" { afk = true }
+        if what == "lock" || what == "sleep" { afk = true; onAway?() }
     }
 
     private func checkIdle() {
@@ -58,6 +60,7 @@ final class SystemWatcher {
             var e = Event("afk", payload: ["event": "idle", "status": "afk", "idle_s": Int(idle)])
             e.ts = Date().timeIntervalSince1970 - idle   // 경계는 마지막 입력 시각으로 소급
             store.write(e)
+            onAway?()
         } else if afk && idle < 5 {
             afk = false
             store.write(Event("afk", payload: ["event": "input", "status": "active"]))

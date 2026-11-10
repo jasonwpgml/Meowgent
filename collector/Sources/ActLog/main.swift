@@ -93,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         browser.aiResponses = aiResponses
         apps = AppWatcher(store: store, text: text, browser: browser)
         system = SystemWatcher(store: store, tap: tap)
+        system.onAway = { [weak self] in self?.reactions.away() }
         tap.onKey = { [weak self] isReturn, shift in
             self?.text.keyPressed(isReturn: isReturn, shift: shift)
             self?.pet?.onKey()
@@ -207,12 +208,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         resources.notify = { [weak self, weak p] n in
             guard let self, self.allow("resource"), self.gate(n.text, urgent: n.urgent) else { return }
             p?.notify(n.text, urgent: n.urgent, validUntil: n.validUntil, detail: n.detail,
-                      track: self.reactions.track(src: "resource", kind: "resource", text: n.text, canMute: true))
+                      track: self.reactions.track(src: "resource", kind: "resource", text: n.text, canMute: true,
+                                                  act: .app(["com.apple.ActivityMonitor"])))
         }
         quota.codexFallback = { [weak self] in self?.agents.codexWindows ?? [] }
+        // 에이전트 말풍선: 누르면 그 대화가 열린 앱으로. 10분 안에 그 앱으로 가면 '관련 행동'
         agents.notify = { [weak self, weak p] n in
             guard let self, self.allow("agent"), self.gate(n.text, urgent: n.urgent) else { return }
-            p?.notify(n.text, urgent: n.urgent, track: self.reactions.track(src: "agent", kind: "agent", text: n.text, canMute: true))
+            let open = n.app.flatMap { b in Self.appName(b).map { name in NoticeOpen(title: "\(name) 열기", run: { Self.activate(b) }) } }
+            p?.notify(n.text, urgent: n.urgent, open: open,
+                      track: self.reactions.track(src: "agent", kind: "agent", text: n.text, canMute: true, act: n.app.map { .app([$0]) }))
         }
         mind.say = { [weak self, weak p] l in
             guard let self else { return }
@@ -220,8 +225,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let kind = "mind:" + (l.kind ?? "system")
             let mutable = l.kind.map { !["chat", "say", "system"].contains($0) } ?? false
             if mutable, !self.allow(kind) { return }
+            // 쉬라는 말(오래 쉬지 않음·늦은 시간)은 10분 안에 자리를 비우면 '관련 행동'
+            let act: ReactionRules.Act? = ["long_focus", "late"].contains(l.kind ?? "") ? .away : nil
             p?.notify(l.text, urgent: l.urgent, reply: { [weak self] in self?.mind.talk() },
-                      track: self.reactions.track(src: "mind", kind: kind, text: l.text, id: l.id, canMute: mutable))
+                      track: self.reactions.track(src: "mind", kind: kind, text: l.text, id: l.id, canMute: mutable, act: act))
         }
         mind.opened = { [weak self] in self?.reactions.chatOpened() }
         forward.notify = { [weak self, weak p] t in
@@ -381,6 +388,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         quota.fillMenu(sub)
         top.submenu = sub
         menu.addItem(top)
+    }
+
+    static func appName(_ bundle: String) -> String? {
+        guard let u = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) else { return nil }
+        return FileManager.default.displayName(atPath: u.path).replacingOccurrences(of: ".app", with: "")
+    }
+
+    /// 그 앱을 앞으로 (안 떠 있으면 연다)
+    static func activate(_ bundle: String) {
+        guard let u = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) else { return }
+        let c = NSWorkspace.OpenConfiguration()
+        c.activates = true
+        NSWorkspace.shared.openApplication(at: u, configuration: c)
     }
 
     func pause(minutes: Double?) {

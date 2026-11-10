@@ -5,7 +5,12 @@ import AppKit
 /// Codex 사용 한도는 codexWindows로 넘기고, 알림은 QuotaWatch가 한다 (CodexBar 값이 없을 때 대신 쓰임).
 /// 비용: 파일마다 지난번 읽은 위치를 기억해 새로 붙은 줄만 읽고(처음에만 끝부분), 폴더 열거는 30초에 한 번만 한다.
 final class AgentMonitor {
-    struct Notice { let text: String; let urgent: Bool }
+    /// app: 그 대화가 열린 앱의 번들 ID (말풍선을 누르면 그 앱으로, 반응 기록의 '관련 행동'도 이 앱)
+    struct Notice { let text: String; let urgent: Bool; var app: String? = nil }
+    static let claudeApp = "com.anthropic.claudefordesktop"
+    static let codexApp = "com.openai.codex"
+    /// 이보다 짧게 끝난 답은 알리지 않는다 (금방 끝나는 건 기다리며 보고 있었을 것). phrases.json 의 done.min_turn_s
+    static var minTurn: Double { PhraseTable.current.param("done.min_turn_s") }
     var notify: ((Notice) -> Void)?
     /// 지금 그 에이전트 앱을 보고 있으면 "끝났어요" 알림은 생략
     var frontBundle: () -> String? = { nil }
@@ -49,8 +54,8 @@ final class AgentMonitor {
         }
     }
 
-    private func send(_ text: String, urgent: Bool = false) {
-        DispatchQueue.main.async { [weak self] in self?.notify?(Notice(text: text, urgent: urgent)) }
+    private func send(_ text: String, urgent: Bool = false, app: String? = nil) {
+        DispatchQueue.main.async { [weak self] in self?.notify?(Notice(text: text, urgent: urgent, app: app)) }
     }
 
     /// 끝남은 바로 말하지 않고 doneWindow 동안 모은다 (그 사이 더 끝나면 같이)
@@ -64,7 +69,8 @@ final class AgentMonitor {
                 let items = self.pendingDone
                 self.pendingDone = []
                 self.doneFlush = nil
-                if let line = NoticeBatch.doneLine(items) { self.notify?(Notice(text: line, urgent: false)) }
+                let app = items.first.map { $0.agent == "Codex" ? Self.codexApp : Self.claudeApp }
+                if let line = NoticeBatch.doneLine(items) { self.notify?(Notice(text: line, urgent: false, app: app)) }
             }
             self.doneFlush = w
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.doneWindow, execute: w)
@@ -80,6 +86,8 @@ final class AgentMonitor {
         var limits: [Quota.Window]?
         var limitsLocked = false     // 가장 최근 token_count 줄의 한도를 쓰고 있다 (더 새 줄이 와야 바뀜)
         var doneAt: String?
+        var startedAt: Double?
+        var turnSecs: Double?        // 마지막으로 끝난 일이 걸린 시간 (task_started → task_complete)
     }
     private var codexTails: [String: CodexTail] = [:]
 
@@ -121,12 +129,14 @@ final class AgentMonitor {
                     if pct != nil { st.ctxPct = pct; st.limits = rl; st.limitsLocked = rl != nil }
                     else if let rl, !st.limitsLocked { st.limits = rl; st.limitsLocked = true }
                 }
+                if type == "task_started" || type == "turn_started" { st.startedAt = Self.time(obj["timestamp"]) }
                 if type == "task_complete" || type == "turn_complete" {
                     st.doneAt = (obj["timestamp"] as? String) ?? "\(p.description.count)"
+                    if let a = st.startedAt, let b = Self.time(obj["timestamp"]) { st.turnSecs = b - a } else { st.turnSecs = nil }
                 }
             }
             codexTails[f.path] = st
-            if let c = st.ctxPct { warnContext(session: "codex:" + id, agent: "Codex ‘\(name)’", pct: c) }
+            if let c = st.ctxPct { warnContext(session: "codex:" + id, agent: "Codex ‘\(name)’", pct: c, app: Self.codexApp) }
             if let limits = st.limits, lines.isEmpty {
                 let stamped = limits.map { var w = $0; w.capturedAt = mod; return w }
                 DispatchQueue.main.async { self.codexWindows = stamped }
@@ -136,7 +146,8 @@ final class AgentMonitor {
                 lastDone["codex:" + id] = d
                 let inCodex = front.map { $0.contains("openai") || $0.contains("codex") } ?? false
                 let fresh = Date().timeIntervalSince(mod) < 30
-                if !first && !inCodex && fresh { queueDone(.init(agent: "Codex", name: name)) }
+                let long = st.turnSecs.map { $0 >= Self.minTurn } ?? true
+                if !first && !inCodex && fresh && long { queueDone(.init(agent: "Codex", name: name)) }
             }
             if let c = st.ctxPct {
                 contextPct["⚠︎ Codex ‘\(name)’ 컨텍스트 \(c)%"] = c
@@ -172,6 +183,8 @@ final class AgentMonitor {
         var sidechain = false
         var doneKey: String?
         var entry: String?
+        var askedAt: Double?
+        var turnSecs: Double?        // 마지막 답이 걸린 시간 (사용자가 친 말 → 끝맺은 답)
     }
     private var claudeTails: [String: ClaudeTail] = [:]
 
@@ -189,8 +202,13 @@ final class AgentMonitor {
             if reset { st = ClaudeTail(offset: st.offset) }
             for obj in objs {
                 if let e = obj["entrypoint"] as? String { st.entry = e }
+                if obj["type"] as? String == "user", obj["isMeta"] as? Bool != true,
+                   let m = obj["message"] as? [String: Any], Self.isPrompt(m["content"]) {
+                    st.askedAt = Self.time(obj["timestamp"])
+                }
                 guard obj["type"] as? String == "assistant", let msg = obj["message"] as? [String: Any] else { continue }
                 let ended = msg["stop_reason"] as? String == "end_turn"
+                if ended { st.turnSecs = { if let a = st.askedAt, let b = Self.time(obj["timestamp"]) { return b - a }; return nil }() }
                 let key = obj["uuid"] as? String ?? (obj["timestamp"] as? String)
                 if let u = msg["usage"] as? [String: Any] {
                     st.ctx = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"]
@@ -208,7 +226,7 @@ final class AgentMonitor {
             let name = claudeTitle(f)
             if let c = st.ctx {
                 let pct = c * 100 / claudeWindow(model: st.model, used: c, session: id)
-                warnContext(session: "claude:" + id, agent: "Claude ‘\(name)’", pct: pct)
+                warnContext(session: "claude:" + id, agent: "Claude ‘\(name)’", pct: pct, app: Self.claudeApp)
                 contextPct["⚠︎ Claude ‘\(name)’ 컨텍스트 \(pct)%"] = pct
                 if lines.count < 3 { lines.append("Claude ‘\(name)’: 컨텍스트 \(pct)% (\(c / 1000)k)") }
             }
@@ -217,7 +235,8 @@ final class AgentMonitor {
                 lastDone["claude:" + id] = d
                 let inAgent = front.map { $0.contains("anthropic") || $0.contains("Terminal") || $0.contains("iterm") || $0.contains("ghostty") } ?? false
                 let mod = (try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                if !first && !inAgent && Date().timeIntervalSince(mod) < 30 { queueDone(.init(agent: "Claude", name: name)) }
+                let long = st.turnSecs.map { $0 >= Self.minTurn } ?? true
+                if !first && !inAgent && long && Date().timeIntervalSince(mod) < 30 { queueDone(.init(agent: "Claude", name: name)) }
             }
         }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
@@ -255,7 +274,7 @@ final class AgentMonitor {
         return title
     }
 
-    private func warnContext(session: String, agent: String, pct: Int) {
+    private func warnContext(session: String, agent: String, pct: Int, app: String) {
         let step = NoticeBatch.contextStep(pct)
         // 정리(compact)해서 크게 줄었으면 처음부터 다시 센다
         if pct < 40, warnedContext[session] != nil { warnedContext[session] = nil; saveWarned() }
@@ -264,7 +283,7 @@ final class AgentMonitor {
         warnedContext[session] = Warned(step: step, at: Date().timeIntervalSince1970)
         saveWarned()
         if first && step == 50 { return }   // 처음 본 대화가 이미 절반 넘었으면 조용히 (80% 넘은 건 알림)
-        send(NoticeBatch.contextLine(agent: agent, pct: pct, step: step), urgent: step >= 80)
+        send(NoticeBatch.contextLine(agent: agent, pct: pct, step: step), urgent: step >= 80, app: app)
     }
 
     private static func loadWarned() -> [String: Warned] {
@@ -277,6 +296,28 @@ final class AgentMonitor {
     /// 감시 큐에서 부른다
     private func saveWarned() {
         if let d = try? JSONEncoder().encode(warnedContext) { UserDefaults.standard.set(d, forKey: "agentContextWarned") }
+    }
+
+    // MARK: 시각 · 사용자 입력
+
+    private static let iso: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let isoPlain = ISO8601DateFormatter()
+
+    static func time(_ v: Any?) -> Double? {
+        guard let s = v as? String else { return nil }
+        return (iso.date(from: s) ?? isoPlain.date(from: s))?.timeIntervalSince1970
+    }
+
+    /// 사용자가 친 말인가 (도구 결과는 아님): 글자 그대로이거나, text 조각이 있고 tool_result 가 없는 것
+    static func isPrompt(_ content: Any?) -> Bool {
+        if let s = content as? String { return !s.isEmpty }
+        guard let parts = content as? [[String: Any]] else { return false }
+        let types = parts.compactMap { $0["type"] as? String }
+        return types.contains("text") && !types.contains("tool_result")
     }
 
     // MARK: 파일 도구

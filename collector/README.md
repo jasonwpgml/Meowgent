@@ -92,10 +92,12 @@
 - **개선**: 매주 개선 제안(기본 꺼짐, 켤 때 무엇을 보내는지 묻는다). 지난 7일 알림 통계(대화·작업 이름과 숫자는 가림)와 판단 통계, 지금 문구·설정을 고양이 전용 Codex 계정으로 보내 제안을 받는다. 입력한 글·활동 기록·고양이와 나눈 대화는 보내지 않는다. 문구·설정 제안은 [적용]하면 `phrases.json`만 바뀌고(다시 빌드 안 함), 아이디어는 [확인]만. "지금 받기"로 바로 한 번.
 
 ## 고양이 알림 문구·설정 표
-`phrases.json`(데이터 폴더): 에이전트 알림 문구(`done.claude`·`done.codex`·`done.many`·`context.high`·`context.half`, `{agent}`·`{name}`·`{count}`·`{pct}` 자리표시)와 설정(`done.window_s`·`gate.normal_min`·`gate.urgent_min`·`context.half_pct`·`context.high_pct`·`context.top_pct`). 앱이 켤 때 빠진 키를 기본값으로 채운다. 자리표시가 빠진 문구나 범위 밖 값은 받지 않는다.
+`phrases.json`(데이터 폴더): 에이전트 알림 문구(`done.claude`·`done.codex`·`done.many`·`context.high`·`context.half`, `{agent}`·`{name}`·`{count}`·`{pct}` 자리표시)와 설정(`done.window_s`·`done.min_turn_s`·`gate.normal_min`·`gate.urgent_min`·`context.half_pct`·`context.high_pct`·`context.top_pct`). 앱이 켤 때 빠진 키를 기본값으로 채운다. 자리표시가 빠진 문구나 범위 밖 값은 받지 않는다.
 
 ## 고양이 알림 줄이기
 - 에이전트 "답 끝남"은 15초(`done.window_s`) 동안 모았다가 한 마디로 말한다 ("✅ 3개 끝났다냥. 하나씩 봐라냥" + 이름들).
+- 답이 90초(`done.min_turn_s`)보다 빨리 끝났으면 알리지 않는다. 금방 끝나는 답은 기다리며 보고 있었을 것이라서다. Claude는 사용자가 친 말 → 끝맺은 답, Codex는 `task_started` → `task_complete` 사이를 잰다 (2026-11-10, 같은 대화 "답 끝났다냥"이 하루 6번 뜸).
+- 에이전트 말풍선(끝남·컨텍스트)을 누르면 그 대화가 열린 앱(Claude·Codex)이 앞으로 온다. 우클릭에는 "↗ Claude 열기". 특정 대화까지 고르지는 못한다.
 - 컨텍스트 경고는 대화마다 50%(조용히) · 80% · 90%에서 한 번씩만 (`context.*_pct`). 알린 단계는 UserDefaults(`agentContextWarned`, 7일)에 남겨 다시 켜도 반복하지 않고, 정리(compact)로 40% 아래로 내려가면 처음부터 다시 센다.
 - 한도·맥 상태·에이전트 알림은 첫 줄에서 숫자만 다른 같은 말이면 30분(급하면 10분) 안에 다시 말하지 않는다 (`NoticeBatch.Gate`). 고양이 대화 답은 거르지 않는다.
 - 말투는 모두 "~다냥" (pet/docs/CAT_VOICE.md).

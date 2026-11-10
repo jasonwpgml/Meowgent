@@ -69,4 +69,4 @@ cat > "$MIND_PLIST" <<PL
 </plist>
 PL
 reload_agent "$MIND_LABEL" "$MIND_PLIST"
-echo "설치됨: $DEST/cat_mind.py (launchd: $MIND_LABEL) — 끄기: 고양이 메뉴 '🧠 말하는 고양이'"
+echo "설치됨: $DEST/cat_mind.py (launchd: $MIND_LABEL) — 끄기: 메뉴 막대 › 🐈 고양이 설정 › '🧠 말하는 고양이'"

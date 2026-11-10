@@ -1159,6 +1159,15 @@ class Mind:
         if last is not None and now - last >= self.cfg["break_min_s"]:
             self.st["active_since"] = max(self.st["active_since"], now)
 
+    def on_silence(self, now):
+        """지금도 기록이 break_min_s 넘게 안 들어오고 있다 (앱이 꺼졌거나 기록이 멈춤): 그동안은 일한 시간으로 세지 않는다.
+        on_gap 은 새 기록이 와야 움직이므로, 앱을 종료해 둔 동안 고양이 루프만 돌면 계속 쌓였다
+        (2026-11-09 11:33 앱 종료 → 17:05에 '여섯 시간째'라고 함)"""
+        last = self.st.get("last_event_ts")
+        if last is None or self.st["afk"] or now - last < self.cfg["break_min_s"]:
+            return
+        self.st["active_since"] = max(self.st["active_since"], now)
+
     def on_afk(self, ts, away):
         if away and not self.st["afk"]:
             self.st["afk"], self.st["afk_since"] = True, ts
@@ -1597,6 +1606,7 @@ class Mind:
                 f.unlink(missing_ok=True)
             return
         self.read_afk()
+        self.on_silence(self.now())
         self.collect_answers()
         self.collect_acts()
         if self.now() - self.last_tasks >= 5:   # 코딩 작업은 Codex 가 바빠도 지켜본다

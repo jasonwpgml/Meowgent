@@ -14,12 +14,12 @@ struct PhraseTable: Equatable {
             "context.high": "{agent} 컨텍스트 {pct}%다냥. 정리(compact)하거나 새 세션으로 넘기라냥",
             "context.half": "{agent} 컨텍스트 절반 넘었다냥 ({pct}%)",
         ],
-        params: ["done.window_s": 15, "gate.normal_min": 30, "gate.urgent_min": 10,
+        params: ["done.window_s": 15, "done.min_turn_s": 90, "gate.normal_min": 30, "gate.urgent_min": 10,
                  "context.half_pct": 50, "context.high_pct": 80, "context.top_pct": 90])
 
     /// 설정마다 허용 범위 (개선 제안이 엉뚱한 값을 넣어도 이 안으로)
     static let ranges: [String: ClosedRange<Double>] = [
-        "done.window_s": 0...120, "gate.normal_min": 0...240, "gate.urgent_min": 0...120,
+        "done.window_s": 0...120, "done.min_turn_s": 0...1800, "gate.normal_min": 0...240, "gate.urgent_min": 0...120,
         "context.half_pct": 30...79, "context.high_pct": 60...95, "context.top_pct": 70...99,
     ]
 

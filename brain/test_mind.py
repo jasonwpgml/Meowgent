@@ -689,5 +689,13 @@ check("루프가 잠깐 쉬면 그대로", m.st["active_since"] == T0 - 3000)
 m.on_pause(T0 + 5 + 3600)
 check("루프가 한 시간 멈췄다 깨면(맥 잠자기) 다시 셈", m.st["active_since"] == T0 + 5 + 3600)
 
+m, clock, data = make(T0)
+m.st.update(active_since=T0 - 7200, last_event_ts=T0 - 120)
+m.on_silence(T0)
+check("기록이 2분 비면 그대로", m.st["active_since"] == T0 - 7200)
+m.st["last_event_ts"] = T0 - 6 * 3600
+m.on_silence(T0)
+check("앱이 꺼져 기록이 6시간 안 오면 일한 시간으로 안 셈", m.st["active_since"] == T0 and "long_focus" not in [s[0] for s in m.observe([])])
+
 print("\n" + ("모두 통과" if not failed else f"{failed}개 실패"))
 sys.exit(1 if failed else 0)

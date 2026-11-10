@@ -140,6 +140,7 @@ enum Resource {
         let urgent: Bool
         let hold: TimeInterval        // 이만큼 이어져야 말한다
         var app: App? = nil           // 원인 앱 (대시보드에서 "알리지 않기")
+        var cooldown: TimeInterval? = nil   // 다시 말하기까지 쉬는 시간 (없으면 Tracker.cooldown 1시간)
     }
 
     // 문턱값
@@ -175,7 +176,7 @@ enum Resource {
         if s.pressure == 1 {
             out.append(Alert(key: "memory:tight", kind: .memory,
                              text: "🧠 메모리가 빠듯하다냥. 느려질 수 있다냥\n제일 큰 앱: " + names(bigMem),
-                             short: "🧠 메모리 빠듯 (\(Int(s.memUsed))%)", urgent: false, hold: 60))
+                             short: "🧠 메모리 빠듯 (\(Int(s.memUsed))%)", urgent: false, hold: 300, cooldown: 6 * 3600))
         } else if s.pressure >= 2 {
             out.append(Alert(key: "memory:critical", kind: .memory,
                              text: "🧠 메모리가 바닥났다냥! 안 쓰는 앱을 닫아 달라냥\n제일 큰 앱: " + names(bigMem),
@@ -246,7 +247,7 @@ enum Resource {
                 seen[k] = nil; since[k] = nil; firedThisTime.remove(k)
             }
             return held(alerts, now: now).filter { a in
-                !firedThisTime.contains(a.key) && (fired[a.key].map { now.timeIntervalSince($0) >= Self.cooldown } ?? true)
+                !firedThisTime.contains(a.key) && (fired[a.key].map { now.timeIntervalSince($0) >= (a.cooldown ?? Self.cooldown) } ?? true)
             }.sorted { $0.urgent && !$1.urgent }
         }
 
