@@ -46,6 +46,8 @@
 ```
 `~/Applications/Meowgent.app`에 설치하고 실행한다. 고양이 코드·원화는 비공개 `../pet/` 서브모듈에서 오고(`setup-pet.sh`가 링크), 원화는 AES로 잠긴 `.sprite`로 번들에 들어간다. 개발 빌드에는 팩 그림(assets/vendor)도 들어간다.
 
+**커밋 뒤 자동 적용**: `../tools/hooks/install.sh`를 한 번 돌려 두면 main에 커밋할 때마다 바뀐 쪽만 백그라운드로 다시 깐다 (앱·그림·pet → `build.sh`, `brain/` → `brain/install.sh`). 문서·테스트만 바뀐 커밋과 덧붙인 worktree의 커밋은 건너뛴다. 그래서 커밋한 뒤에는 `build.sh`를 따로 돌리지 않는다 (두 번 빌드되고 앱이 두 번 재시작된다). 기록은 `../.build/autodeploy/history.log`·`last.log`, 실패하면 고양이 inbox에 빨강 `!`. 한 번 건너뛰려면 `MEOWGENT_NO_AUTODEPLOY=1 git commit …`, 떼려면 `install.sh --remove`.
+
 배포본(팩 그림 제외, 심볼 제거)은 `./release.sh` → `dist/`. Developer ID가 있으면 `SIGN_ID`·`NOTARY_PROFILE`을 주면 DMG 공증까지 한다. 자세한 절차는 [../docs/RELEASE.md](../docs/RELEASE.md).
 
 처음 실행하면 macOS가 두 가지 권한을 묻는다: **손쉬운 사용**, **입력 모니터링**.

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# 커밋 뒤 자동 적용: main 에 커밋하면 바뀐 쪽만 이 맥에 다시 깐다.
+#   앱(collector/ · assets/ · pet)        → collector/build.sh
+#   판단기·말하는 고양이(brain/)          → brain/install.sh
+# 설치: tools/hooks/install.sh   ·   한 번 건너뛰기: MEOWGENT_NO_AUTODEPLOY=1 git commit …
+# 커밋을 기다리게 하지 않으려고 실제 작업은 autodeploy.sh 가 백그라운드에서 한다.
+# 전역 지문 훅(~/.agents/fingerprint/hooks/_dispatch)이 .git/hooks/post-commit 으로 넘겨줘서 여기까지 온다.
+set -u
+
+# 바뀐 파일 목록(표준 입력)에서 다시 깔 대상을 고른다. 문서·테스트만 바뀐 커밋은 건너뛴다.
+classify() {
+  local app="" brain="" path
+  while IFS= read -r path; do
+    case "$path" in
+      *.md|collector/Tests/*|brain/test_*) [[ "$path" == brain/persona.md ]] && brain=brain ;;
+      collector/*|assets/*|pet|pet/*) app=app ;;
+      brain/*) brain=brain ;;
+    esac
+  done
+  echo $app $brain
+}
+if [[ "${1:-}" == --classify ]]; then classify; exit 0; fi
+
+[[ "${MEOWGENT_NO_AUTODEPLOY:-}" == 1 ]] && exit 0
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+gitdir=$(git rev-parse --absolute-git-dir)
+# 고양이가 맡긴 코딩 작업 같은 덧붙인 worktree 의 커밋은 적용하지 않는다
+[[ "$gitdir" == "$(cd "$(git rev-parse --git-common-dir)" && pwd -P)" ]] || exit 0
+[[ "$(git symbolic-ref --short -q HEAD)" == main ]] || exit 0
+# rebase · cherry-pick 도중의 커밋은 끝난 뒤의 마지막 커밋에 맡긴다
+[[ -e "$gitdir/rebase-merge" || -e "$gitdir/rebase-apply" || -e "$gitdir/CHERRY_PICK_HEAD" ]] && exit 0
+
+if git rev-parse -q --verify HEAD^ >/dev/null; then changed=$(git diff --name-only HEAD^ HEAD)
+else changed=$(git ls-tree -r --name-only HEAD); fi
+targets=$(classify <<<"$changed")
+state="$root/.build/autodeploy"
+mkdir -p "$state"
+if [[ -z "$targets" ]]; then
+  echo "$(date '+%F %T') $(git rev-parse --short HEAD) 건너뜀 (앱·brain 변경 없음)" >> "$state/history.log"
+  exit 0
+fi
+for t in $targets; do : > "$state/pending-$t"; done
+# 이미 돌고 있으면 그쪽이 pending 을 보고 이어서 한다
+nohup "$root/tools/hooks/autodeploy.sh" "$root" </dev/null >/dev/null 2>&1 &
+exit 0
