@@ -648,6 +648,13 @@ do {
     check("눌러서 엶은 손댐, 관련 행동은 읽기보다 강함", ReactionRules.touches("opened")
           && ReactionRules.summary(["shown", "ignored", "acted"]) == "acted" && ReactionRules.summary(["shown", "opened", "acted"]) == "opened")
     check("끝남 짧은 답 기준 기본 90초", PhraseTable.defaults.param("done.min_turn_s") == 90)
+    check("홀드아웃: 기간 안이면 확률대로", ReactionRules.holdout(p: 0.5, until: 100, now: 50, roll: 0.3) && !ReactionRules.holdout(p: 0.5, until: 100, now: 50, roll: 0.7))
+    check("홀드아웃: 기간 지나면 끔", !ReactionRules.holdout(p: 0.5, until: 100, now: 100, roll: 0.0))
+    let wl = ReactionRules.line(id: "a", ev: "withheld", src: "agent", kind: "agent", text: "끝났다냥", shownAt: 1, now: 1, tag: "done")
+    let al = ReactionRules.line(id: "a", ev: "acted", src: "agent", kind: "agent", text: nil, shownAt: 1, now: 31, via: "app", tag: "done")
+    check("보류 줄엔 글·tag, 뒤 줄엔 after", wl["text"] as? String == "끝났다냥" && wl["tag"] as? String == "done" && wl["after"] == nil
+          && al["after"] as? Double == 30 && al["tag"] == nil)
+    check("보류 + 관련 행동 → 관련 행동", ReactionRules.summary(["withheld", "acted"]) == "acted" && ReactionRules.summary(["withheld"]) == "withheld")
 }
 
 print(failed == 0 ? "\n모두 통과" : "\n실패 \(failed)건")

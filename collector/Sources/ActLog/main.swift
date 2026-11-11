@@ -213,11 +213,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         quota.codexFallback = { [weak self] in self?.agents.codexWindows ?? [] }
         // 에이전트 말풍선: 누르면 그 대화가 열린 앱으로. 10분 안에 그 앱으로 가면 '관련 행동'
+        // 홀드아웃 실험 (2026-11-11 ~ phrases.json holdout.done_until): 답 끝남은 holdout.done_p 확률로 안 보여 주고 withheld 로만 남긴다.
+        // 보여 준 것과 안 보여 준 것의 '10분 안에 그 앱으로 감' 비율을 비교해 이 알림이 행동을 바꾸는지 본다 (brain/holdout_report.py)
         agents.notify = { [weak self, weak p] n in
             guard let self, self.allow("agent"), self.gate(n.text, urgent: n.urgent) else { return }
+            let act = n.app.map { ReactionRules.Act.app([$0]) }
+            let tag = n.done ? "done" : "context"
+            let t = PhraseTable.current
+            if n.done, ReactionRules.holdout(p: t.param("holdout.done_p"), until: t.param("holdout.done_until"),
+                                             now: Date().timeIntervalSince1970, roll: Double.random(in: 0..<1)) {
+                self.reactions.track(src: "agent", kind: "agent", text: n.text, canMute: true, act: act, tag: tag).record("withheld")
+                Log.write("끝남 알림 보류 (홀드아웃 실험): \(n.text.replacingOccurrences(of: "\n", with: " / "))")
+                return
+            }
             let open = n.app.flatMap { b in Self.appName(b).map { name in NoticeOpen(title: "\(name) 열기", run: { Self.activate(b) }) } }
             p?.notify(n.text, urgent: n.urgent, open: open,
-                      track: self.reactions.track(src: "agent", kind: "agent", text: n.text, canMute: true, act: n.app.map { .app([$0]) }))
+                      track: self.reactions.track(src: "agent", kind: "agent", text: n.text, canMute: true, act: act, tag: tag))
         }
         mind.say = { [weak self, weak p] l in
             guard let self else { return }

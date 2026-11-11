@@ -3,7 +3,8 @@ import AppKit
 /// 말풍선 하나에 붙는 반응 기록 고리. 고양이(Pet)가 보여 주고, 눌리고, 사라질 때 record 를 부른다.
 /// 사건: shown 보임 · replied 답함 · opened 눌러서 그 앱 열기 · detail 자세히 봄 · read 올려 두고 읽기만 함 ·
 ///      ignored 7초 안에 마우스를 안 올림 · cut 다른 말에 밀려 사라짐 · dropped 보여 줄 틈이 없어 버림 · rejected 👎 · muted 🔇 ·
-///      acted 말풍선과 상관없이 10분 안에 그 말이 가리키는 행동을 함 (그 앱으로 감, 자리를 비움 등)
+///      acted 말풍선과 상관없이 10분 안에 그 말이 가리키는 행동을 함 (그 앱으로 감, 자리를 비움 등) ·
+///      withheld 홀드아웃 실험으로 일부러 안 보여 줌 (보여 준 것과 같은 행동 창으로 잰다)
 final class NoticeTrack {
     let canMute: Bool
     let record: (String) -> Void
@@ -61,21 +62,22 @@ final class Reactions {
 
     /// src: 알림을 낸 곳 (mind·agent·quota·resource·forward·secret), kind: 끌 단위 ("mind:long_focus", "agent" …)
     /// act: 이 말이 가리키는 행동 (보인 뒤 10분 안에 하면 acted 로 남긴다)
-    func track(src: String, kind: String, text: String, id: String? = nil, canMute: Bool, act: ReactionRules.Act? = nil) -> NoticeTrack {
+    /// tag: 같은 종류 안에서 나눌 때 (에이전트 done·context). shown·withheld 줄에만 남는다
+    func track(src: String, kind: String, text: String, id: String? = nil, canMute: Bool, act: ReactionRules.Act? = nil, tag: String? = nil) -> NoticeTrack {
         let id = id ?? "n-\(Int(Date().timeIntervalSince1970 * 1000))-\(Int.random(in: 100...999))"
         var shownAt: Double?
         return NoticeTrack(canMute: canMute) { [weak self] ev in
             guard let self else { return }
             let now = Date().timeIntervalSince1970
-            if ev == "shown" {
+            if ev == "shown" || ev == "withheld" {
                 shownAt = now
-                self.lastShown = ReactionRules.Shown(id: id, src: src, kind: kind, at: now)
+                if ev == "shown" { self.lastShown = ReactionRules.Shown(id: id, src: src, kind: kind, at: now) }
                 if let act { self.watches.append((id, src, kind, now, act)) }
             } else if ReactionRules.touches(ev), self.lastShown?.id == id {
                 self.lastShown?.touched = true
             }
             if ev == "muted" { self.mute(kind, now: now) }
-            self.write(ReactionRules.line(id: id, ev: ev, src: src, kind: kind, text: text, shownAt: shownAt, now: now))
+            self.write(ReactionRules.line(id: id, ev: ev, src: src, kind: kind, text: text, shownAt: shownAt, now: now, tag: tag))
         }
     }
 
@@ -137,6 +139,9 @@ enum ReactionRules {
         var via: String { if case .away = self { return "away" }; return "app" }
     }
 
+    /// 홀드아웃: 실험 기간(until 전)이면 roll < p 일 때 안 보여 준다
+    static func holdout(p: Double, until: Double, now: Double, roll: Double) -> Bool { now < until && roll < p }
+
     static func matches(_ act: Act, _ ev: Happened) -> Bool {
         switch (act, ev) {
         case let (.app(ids), .app(b)): return ids.contains(b)
@@ -168,18 +173,20 @@ enum ReactionRules {
 
     static func active(_ m: [String: Double], now: Double) -> [String: Double] { m.filter { $0.value > now } }
 
-    static func line(id: String, ev: String, src: String, kind: String, text: String?, shownAt: Double?, now: Double, via: String? = nil) -> [String: Any] {
+    static func line(id: String, ev: String, src: String, kind: String, text: String?, shownAt: Double?, now: Double, via: String? = nil, tag: String? = nil) -> [String: Any] {
         var o: [String: Any] = ["ts": now, "id": id, "ev": ev, "src": src, "kind": kind]
-        if let t = text, ev == "shown" { o["text"] = String(t.replacingOccurrences(of: "\n", with: " / ").prefix(160)) }
-        if let s = shownAt, ev != "shown" { o["after"] = (max(0, now - s) * 10).rounded() / 10 }
+        let first = ev == "shown" || ev == "withheld"
+        if let t = text, first { o["text"] = String(t.replacingOccurrences(of: "\n", with: " / ").prefix(160)) }
+        if let tag, first { o["tag"] = tag }
+        if let s = shownAt, !first { o["after"] = (max(0, now - s) * 10).rounded() / 10 }
         if let via { o["via"] = via }
         return o
     }
 
     /// 한 말풍선의 사건들 → 대표 반응 하나 (강한 것부터)
-    static let order = ["muted", "rejected", "replied", "opened", "detail", "acted", "read", "ignored", "cut", "dropped", "shown"]
+    static let order = ["muted", "rejected", "replied", "opened", "detail", "acted", "read", "ignored", "cut", "dropped", "withheld", "shown"]
     static let ko = ["muted": "🔇 끔", "rejected": "👎 아니다", "replied": "답함", "opened": "눌러서 엶", "detail": "자세히 봄",
-                     "acted": "관련 행동함", "read": "읽기만 함",
+                     "acted": "관련 행동함", "withheld": "실험으로 안 보여 줌", "read": "읽기만 함",
                      "ignored": "무시", "cut": "다른 말에 밀림", "dropped": "못 보여 줌", "shown": "보이는 중"]
 
     static func summary(_ events: [String]) -> String? {

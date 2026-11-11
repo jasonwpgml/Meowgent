@@ -6,7 +6,8 @@ import AppKit
 /// 비용: 파일마다 지난번 읽은 위치를 기억해 새로 붙은 줄만 읽고(처음에만 끝부분), 폴더 열거는 30초에 한 번만 한다.
 final class AgentMonitor {
     /// app: 그 대화가 열린 앱의 번들 ID (말풍선을 누르면 그 앱으로, 반응 기록의 '관련 행동'도 이 앱)
-    struct Notice { let text: String; let urgent: Bool; var app: String? = nil }
+    /// done: 답 끝남 알림 (컨텍스트 경고가 아님) — 홀드아웃 실험 대상
+    struct Notice { let text: String; let urgent: Bool; var app: String? = nil; var done = false }
     static let claudeApp = "com.anthropic.claudefordesktop"
     static let codexApp = "com.openai.codex"
     /// 이보다 짧게 끝난 답은 알리지 않는다 (금방 끝나는 건 기다리며 보고 있었을 것). phrases.json 의 done.min_turn_s
@@ -70,7 +71,7 @@ final class AgentMonitor {
                 self.pendingDone = []
                 self.doneFlush = nil
                 let app = items.first.map { $0.agent == "Codex" ? Self.codexApp : Self.claudeApp }
-                if let line = NoticeBatch.doneLine(items) { self.notify?(Notice(text: line, urgent: false, app: app)) }
+                if let line = NoticeBatch.doneLine(items) { self.notify?(Notice(text: line, urgent: false, app: app, done: true)) }
             }
             self.doneFlush = w
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.doneWindow, execute: w)

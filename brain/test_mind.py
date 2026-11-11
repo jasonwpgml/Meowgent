@@ -697,5 +697,16 @@ m.st["last_event_ts"] = T0 - 6 * 3600
 m.on_silence(T0)
 check("앱이 꺼져 기록이 6시간 안 오면 일한 시간으로 안 셈", m.st["active_since"] == T0 and "long_focus" not in [s[0] for s in m.observe([])])
 
+# 끝남 알림 홀드아웃 집계 (brain/holdout_report.py)
+import holdout_report
+rows = []
+for i in range(30):
+    rows += [{"id": f"s{i}", "ev": "shown", "src": "agent", "tag": "done"}] + ([{"id": f"s{i}", "ev": "acted", "after": 60}] if i < 21 else [])
+    rows += [{"id": f"w{i}", "ev": "withheld", "src": "agent", "tag": "done"}] + ([{"id": f"w{i}", "ev": "acted", "after": 300}] if i < 9 else [])
+rows.append({"id": "c", "ev": "shown", "src": "agent", "tag": "context"})
+r = holdout_report.report(rows)
+check("홀드아웃: 끝남만 세고 컨텍스트는 뺌", "보여 줌 30건 · 안 보여 줌 30건" in r, r)
+check("홀드아웃: 2분 안 비율 차이와 판단", "2분 안에 그 앱으로 감: 보여 줌 70%" in r and "안 보여 줌 0%" in r and "유지" in r, r)
+
 print("\n" + ("모두 통과" if not failed else f"{failed}개 실패"))
 sys.exit(1 if failed else 0)
