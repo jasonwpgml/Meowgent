@@ -25,7 +25,8 @@ enum MenuBarIcon {
     /// 배터리가 있으면 두 색 숫자 때문에 템플릿으로 못 그려서 (템플릿은 알파만 본다)
     /// 메뉴 막대가 어두운지(dark) 보고 손 색을 직접 정한다. 메뉴 막대 밝기가 바뀌면 다시 불러야 한다.
     /// 메뉴 막대는 템플릿 그림에 준 contentTintColor 도 무시해서 (2026-11-11 확인) 바쁠 때 색도 직접 칠한다
-    static func image(percent: Int?, plugged: Bool, fill: NSColor?, dark: Bool) -> NSImage? {
+    /// number: 손 아래에 숫자를 띄울지 (메뉴의 '메뉴바에 배터리 숫자'). 끄면 그림도 손 높이(18pt)로 돌아간다
+    static func image(percent: Int?, plugged: Bool, fill: NSColor?, dark: Bool, number: Bool = true) -> NSImage? {
         guard let paw else { return nil }
         guard let percent else {
             let out = NSImage(size: paw.size, flipped: false) { r in masked(paw, fill ?? .black, r.size).draw(in: r); return true }
@@ -34,9 +35,10 @@ enum MenuBarIcon {
         }
         let ink = fill ?? (dark ? .white : .black)
         let base = (dark ? NSColor.white : NSColor.black).withAlphaComponent(0.32)
-        let size = NSSize(width: paw.size.width, height: paw.size.height + below)
+        let extra = number ? below : 0
+        let size = NSSize(width: paw.size.width, height: paw.size.height + extra)
         let out = NSImage(size: size, flipped: false) { r in
-            let pr = NSRect(x: r.minX, y: r.minY + below, width: paw.size.width, height: paw.size.height)   // 손 자리
+            let pr = NSRect(x: r.minX, y: r.minY + extra, width: paw.size.width, height: paw.size.height)   // 손 자리
             masked(paw, base, pr.size).draw(in: pr)
             NSGraphicsContext.saveGraphicsState()
             NSBezierPath(rect: NSRect(x: pr.minX, y: pr.minY, width: pr.width, height: pr.height * CGFloat(max(0, min(100, percent))) / 100)).addClip()
@@ -46,6 +48,7 @@ enum MenuBarIcon {
                 ink.setFill()
                 bolt(in: pr).fill()
             }
+            guard number else { return true }
             // 숫자: 테두리를 먼저, 글씨를 위에. 아랫선을 그림 바닥 바로 위에 두면 몸통이 손 아래 가장자리에 걸친다
             // 손 폭을 넘으면 (100) 넘지 않게 글자를 줄인다 (넘친 부분은 그림 밖이라 잘린다)
             let text = "\(percent)" as NSString

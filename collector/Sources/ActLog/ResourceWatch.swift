@@ -39,6 +39,11 @@ final class ResourceWatch: NSObject {
     /// 급하지 않은 알림은 15분에 하나까지 (나머지는 다음 차례)
     static let calmGap: TimeInterval = 15 * 60
 
+    /// 메뉴바 손 아래에 배터리 숫자를 띄울지 (기본 켬). 바꾸면 손을 다시 그린다
+    var batteryNumberOn: Bool {
+        get { UserDefaults.standard.object(forKey: "menuBarBatteryNumber") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "menuBarBatteryNumber"); onIconChange?() }
+    }
     var alertsOn: Bool {
         get { !UserDefaults.standard.bool(forKey: "resourceAlertsOff") }
         set { UserDefaults.standard.set(!newValue, forKey: "resourceAlertsOff") }
@@ -155,6 +160,9 @@ final class ResourceWatch: NSObject {
         sub.addItem("활성 상태 보기 열기", #selector(openActivityMonitor), target: self)
         sub.addItem(.separator())
         sub.addItem(alertsOn ? "🔕 맥 상태 알림 끄기" : "🔔 맥 상태 알림 켜기", #selector(toggleAlerts), target: self)
+        if latest?.battery != nil {
+            sub.addItem("메뉴바에 배터리 숫자", #selector(toggleBatteryNumber), target: self).state = batteryNumberOn ? .on : .off
+        }
         let list = ignored
         if !list.isEmpty {
             let it = NSMenuItem(title: "알리지 않는 앱 (누르면 다시 알림)", action: nil, keyEquivalent: "")
@@ -181,6 +189,7 @@ final class ResourceWatch: NSObject {
     }
 
     @objc private func toggleAlerts() { alertsOn.toggle() }
+    @objc private func toggleBatteryNumber() { batteryNumberOn.toggle() }
 
     @objc private func unignore(_ sender: NSMenuItem) {
         guard let k = sender.representedObject as? String else { return }

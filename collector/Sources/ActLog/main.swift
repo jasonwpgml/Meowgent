@@ -347,7 +347,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let power = battery.map { " · 배터리 \($0.percent)%" + ($0.charging ? " 충전 중" : ($0.onBattery ? "" : " 전원 연결")) } ?? ""
         let dark = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         button.image = MenuBarIcon.image(percent: battery?.percent, plugged: battery.map { !$0.onBattery } ?? false,
-                                         fill: level >= 2 ? .systemRed : (level == 1 ? .systemOrange : nil), dark: dark)
+                                         fill: level >= 2 ? .systemRed : (level == 1 ? .systemOrange : nil), dark: dark,
+                                         number: resources.batteryNumberOn)
         button.image?.accessibilityDescription = tip + busy + power
         button.imagePosition = .imageLeading
         button.appearsDisabled = s.paused
