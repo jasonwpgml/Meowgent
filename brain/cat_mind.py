@@ -15,6 +15,7 @@
 표준 라이브러리만 쓴다. actlog.db·brain.db는 읽기 전용으로 연다.
 """
 import base64
+import difflib
 import json
 import os
 import re
@@ -234,6 +235,16 @@ def read_json(path, default):
         return json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return default
+
+
+# 같은 요청 반복 (on_prompt): 15분 안에 비슷한(글자 60% 넘게 같은) 요청이 앞에 둘 넘게 있으면
+SUGGEST_REPEAT = {"window_s": 900, "min_similar": 2, "ratio": 0.6, "min_chars": 10}
+
+
+def suggest_file(key):
+    """앱 SuggestRules.fileName 과 같다: ASCII 글자·숫자·-_ 만 남기고 나머지는 -"""
+    safe = "".join(ch if (ch.isascii() and ch.isalnum()) or ch in "-_" else "-" for ch in key)
+    return safe[:120] + ".json"
 
 
 def clip(s, n):
@@ -795,6 +806,7 @@ class Mind:
                 self.cfg["code_repos"] = {repo.name: str(repo)}
         self.tasks = code_tasks.Tasks(self.dir, self.cfg, now, log)
         self.last_tasks = 0
+        self.prompts = []   # 최근 AI 질문 (ts, ai, 글) — 같은 요청 반복 찾기, 메모리에만
         self.refresh_quota()
 
     # 저장
@@ -1140,6 +1152,10 @@ class Mind:
             self.st["last_event_ts"] = ts
             if source == "afk":
                 self.on_afk(ts, read_json_str(payload).get("status") == "afk")
+            elif source == "text":
+                o = read_json_str(payload)
+                if o.get("kind") == "ai_prompt" and o.get("reason") == "enter" and str(o.get("text", "")).strip():
+                    self.on_prompt(ts, o.get("ai") or "ai", str(o["text"]).strip())
         self.st["afk_cursor"] = top
 
     def on_gap(self, prev, ts):
@@ -1167,6 +1183,51 @@ class Mind:
         if last is None or self.st["afk"] or now - last < self.cfg["break_min_s"]:
             return
         self.st["active_since"] = max(self.st["active_since"], now)
+
+    def on_prompt(self, ts, ai, text):
+        """같은 AI에 비슷한 요청을 15분 안에 세 번 넘게 다시 쓰면 막힌 것으로 보고 제안 목록에 넣는다 (고양이도 한 마디).
+        지난 3주 기록으로 재 보니 이렇게 묶이는 건 몇 번뿐이었다 (대부분은 고쳐 달라는 이어진 말이라 비슷해도 두 번까지).
+        두 AI에 같은 질문을 넣는 경우는 3주 동안 0번이라 넣지 않았다."""
+        c = SUGGEST_REPEAT
+        self.prompts = [p for p in self.prompts if ts - p[0] <= c["window_s"]]
+        if self.now() - ts > 1800 or len(text) < c["min_chars"]:   # 다시 훑는 옛 기록은 묶지 않는다
+            self.prompts.append((ts, ai, text))
+            return
+        sim = [p for p in self.prompts if p[1] == ai and len(p[2]) >= c["min_chars"]
+               and difflib.SequenceMatcher(None, p[2], text).ratio() >= c["ratio"]]
+        self.prompts.append((ts, ai, text))
+        if len(sim) < c["min_similar"]:
+            return
+        name = {"claude": "Claude", "chatgpt": "ChatGPT", "gemini": "Gemini", "grok": "Grok"}.get(ai, ai)
+        n = len(sim) + 1
+        asked = [clip(p[2], 80) for p in sim[-2:]] + [clip(text, 80)]
+        self.suggest({
+            "key": f"repeat:{ai}:{int(sim[0][0])}", "kind": "repeat_request", "source": "mind",
+            "title": f"{name}에 비슷한 요청을 {n}번 다시 썼다냥",
+            "detail": "\n".join(f"· {a}" for a in asked) + "\n막힌 거면 다른 방법을 같이 찾아볼 수 있다냥.",
+            "value": 0.7, "half_life_h": 3,
+            "say": f"같은 걸 {n}번째 말하고 있다냥. 막혔으면 다른 길을 같이 찾아볼까냥? (제안 목록에 적어 뒀다냥)",
+            "action": {"type": "chat", "label": "같이 찾아보기",
+                       "value": f"방금 {name}에 비슷한 요청을 {n}번 했는데 잘 안 되는 것 같아. 다른 방법을 같이 찾아줘.\n" + "\n".join(f"- {a}" for a in asked)},
+        })
+
+    def suggest(self, o):
+        """제안 목록(suggest/<key>.json)에 넣는다. 같은 key 면 count·updated 만 늘린다 (앱 Suggestions.swift 와 같은 형식)"""
+        d = self.data / "suggest"
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / suggest_file(o["key"])
+        old = read_json(f, None)
+        now = self.now()
+        o = {**o, "id": o["key"], "updated": now}
+        if old:
+            o.update(created=old.get("created", now), count=int(old.get("count", 1)) + 1)
+            for k in ("announced", "snooze_until"):
+                if k in old:
+                    o[k] = old[k]
+        else:
+            o.update(created=now, count=1)
+        write_private(f, json.dumps(o, ensure_ascii=False, indent=2))
+        log(f"제안: {o['title']} ({o['count']}번째)")
 
     def on_afk(self, ts, away):
         if away and not self.st["afk"]:

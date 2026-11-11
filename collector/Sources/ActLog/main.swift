@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var mind = MindBridge(dataDir: dataDir)
     lazy var launcher = Launcher(dataDir: dataDir)
     lazy var dashboard = Dashboard(dataDir: dataDir)
+    lazy var suggestions = Suggestions(dataDir: dataDir)
     lazy var forward = InboxForward(dataDir: dataDir)
     lazy var reactions = Reactions(dataDir: dataDir)
     var statusItem: NSStatusItem!
@@ -186,6 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         p.topMenu = { [weak self] m in self?.resources.addCard(to: m) }
         p.agentSummary = { [weak self] in
             [self?.agents.summary ?? "", self?.quota.attention ?? "", self?.resources.attention ?? "",
+             (self?.suggestions.items.count ?? 0) > 0 ? "💡 제안 \(self?.suggestions.items.count ?? 0)개 (우클릭 › 💡)" : "",
              self?.mind.isOff == false ? self?.mind.quotaLine ?? "" : ""]
                 .filter { !$0.isEmpty }.joined(separator: "\n")
         }
@@ -251,6 +253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var cmds: [(id: String, title: String, run: () -> Void)] = [
             ("dashboard", "대시보드 열기", { [weak self] in self?.dashboard.show() }),
             ("dashboard_inbox", "대시보드 질문 탭", { [weak self] in self?.dashboard.showTab(.inbox) }),
+            ("dashboard_suggest", "대시보드 제안 탭 (해 줄 만한 것 목록)", { [weak self] in self?.dashboard.showTab(.suggest) }),
             ("dashboard_tasks", "대시보드 작업 탭 (맡긴 코딩)", { [weak self] in self?.dashboard.showTab(.tasks) }),
             ("dashboard_thinking", "대시보드 생각 탭 (고양이 판단 기록)", { [weak self] in self?.dashboard.showTab(.thinking) }),
             ("launcher", "앱 검색 런처 열기", { [weak self] in self?.launcher.show(.search) }),
@@ -273,6 +276,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         agents.frontBundle = { Context.shared.snapshot.bundle }
         agents.start()
         quota.start()
+        // 제안 목록: 고양이는 그때 한 마디 하고(say, 1시간에 한 번), 목록에는 남아 대시보드 '제안' 탭에서 한꺼번에 고른다
+        dashboard.suggestions = suggestions
+        suggestions.say = { [weak self, weak p] it in
+            guard let self, let text = it.say, self.allow("suggest:" + it.kind) else { return }
+            p?.notify(text, urgent: false, open: NoticeOpen(title: "제안 목록 보기", run: { [weak self] in self?.dashboard.showTab(.suggest) }),
+                      track: self.reactions.track(src: "suggest", kind: "suggest:" + it.kind, text: text, id: "s-" + it.id, canMute: true))
+        }
+        suggestions.run = { [weak self] a, _ in
+            guard let self else { return false }
+            switch a.type {
+            case "chat": self.mind.send(a.value); self.mind.talk(); return true
+            case "open": return URL(string: a.value).map { NSWorkspace.shared.open($0) } ?? false
+            case "app": Self.activate(a.value); return true
+            case "cleanup": return self.resources.cleaner.quitFromSuggestion(path: a.value)
+            default: return false
+            }
+        }
+        resources.cleaner.suggest = { [weak self] o in self?.suggestions.add(o) }
+        resources.cleaner.unsuggest = { [weak self] k in self?.suggestions.resolve(key: k) }
+        suggestions.start()
         resources.dataDir = dataDir
         resources.start()
         p.start()

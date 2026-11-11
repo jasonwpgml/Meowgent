@@ -9,10 +9,10 @@ import AppKit
 /// 색은 급한 것(빨강)과 안 읽은 경고(시스템 강조색 점)에만 쓰고 나머지는 회색 음영으로 나눈다.
 final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearchFieldDelegate, NSToolbarDelegate {
     enum Tab: Int, CaseIterable {
-        case inbox, warnings, notices, thinking, tasks, improve
+        case inbox, suggest, warnings, notices, thinking, tasks, improve
 
-        var title: String { ["질문", "경고", "알림", "생각", "작업", "개선"][rawValue] }
-        var symbol: String { ["questionmark.bubble", "exclamationmark.triangle", "bell", "brain", "hammer", "wrench.and.screwdriver"][rawValue] }
+        var title: String { ["질문", "제안", "경고", "알림", "생각", "작업", "개선"][rawValue] }
+        var symbol: String { ["questionmark.bubble", "lightbulb", "exclamationmark.triangle", "bell", "brain", "hammer", "wrench.and.screwdriver"][rawValue] }
     }
 
     private let inbox: URL
@@ -47,6 +47,8 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
     private var focusKey: String?                  // 숫자키가 답할 묶음 (맨 위)
     private var focusChoices: [InboxRules.Choice] = []
     private var lastMoved: [(src: URL, dest: URL)] = []
+    /// 제안 목록 (suggest/) — main 이 넣어 준다
+    var suggestions: Suggestions?
     private var shownStamp = ""
 
     static let warnDays: Double = 7
@@ -76,7 +78,10 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
         let warns = newWarnings(loadNotices(), loadChat())
         let counts = [asks > 0 ? "질문 \(asks)" : nil, warns > 0 ? "경고 \(warns)" : nil].compactMap { $0 }.joined(separator: " · ")
         menu.addItem("📋 대시보드\(counts.isEmpty ? "" : " (\(counts))")", #selector(show), target: self)
+        if let n = suggestions?.items.count, n > 0 { menu.addItem("💡 제안 \(n)개 보기", #selector(showSuggest), target: self) }
     }
+
+    @objc func showSuggest() { showTab(.suggest) }
 
     @objc func show() { showTab(nil) }
 
@@ -158,6 +163,9 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
         labels = ThinkRules.labels(labelText)
         improve = (try? Data(contentsOf: mindDir.appendingPathComponent("improve/latest.json"))).flatMap(ThinkRules.parseImprove)
         tasks = loadTasks()
+        suggestions?.load()
+        let sugg = suggestions?.items ?? []
+        sideRows[Tab.suggest.rawValue].count = sugg.count
         unchecked.formIntersection(Set(items.map(\.id)))
         picks = picks.filter { k, _ in items.contains { $0.id == k } }
         if let w = writing, !items.contains(where: { $0.id == w }) { writing = nil }
@@ -169,6 +177,7 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
         // 하는 중인 작업은 분이 바뀔 때마다 다시 그린다
         let taskStamp = tasks.map { "\($0.id):\($0.state)" }.joined(separator: ",") + (tab == .tasks && tasks.contains { $0.state == "running" } ? "|\(Int(Date().timeIntervalSince1970 / 60))" : "")
         let stamp = "\(tab.rawValue)|" + items.map(\.file).joined(separator: ",") + "|\(notices.last?.ts ?? 0)|\(decisions.last?.ts ?? 0)|\(reactText.count)|\(labelText.count)|\(improve?.ts ?? 0)|\(improveOn)|" + taskStamp
+            + "|" + sugg.map { "\($0.file):\($0.count)" }.joined(separator: ",")
         guard force || stamp != shownStamp else { return }
         shownStamp = stamp
         render()
@@ -270,7 +279,7 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
             switch e.keyCode {
             case 6: undo(); return true
             case 3: if let search { window?.makeFirstResponder(search) }; return true
-            case 18, 19, 20, 21, 23, 22: select(Tab(rawValue: digits[e.keyCode]!)!); return true
+            case 18, 19, 20, 21, 23, 22, 26: select(Tab(rawValue: digits[e.keyCode]!)!); return true
             default: return false
             }
         }
@@ -486,6 +495,8 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
             noticeList(list, unseenAfter: warnSeen, empty: "경고 없음")
         case .notices:
             noticeList(notices.filter { !NoticeRules.isWarning($0, chat: chat) }, unseenAfter: nil, empty: "알림 없음")
+        case .suggest:
+            suggestList()
         case .thinking:
             thinkingList()
         case .tasks:
@@ -878,6 +889,29 @@ final class Dashboard: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSSearch
         guard let d = try? Data(contentsOf: mindDir.appendingPathComponent("alive.json")),
               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let ts = o["ts"] as? Double else { return false }
         return Date().timeIntervalSince1970 - ts < 30
+    }
+
+    /// 제안: 중요한 순. 항목마다 필요 없음 · 나중에(하루 뒤 다시) · 하기
+    private func suggestList() {
+        let now = Date().timeIntervalSince1970
+        let q = query
+        let list = (suggestions?.items ?? []).filter { q.isEmpty || ($0.title + " " + ($0.detail ?? "")).lowercased().contains(q) }
+        window?.subtitle = list.isEmpty ? "" : "제안 \(list.count)개 · 중요한 순"
+        if list.isEmpty { add(emptyState("lightbulb", q.isEmpty ? "제안 없음" : "찾는 제안 없음")); return }
+        let src = ["mind": "고양이", "cleaner": "앱 정리"]
+        for (n, it) in list.enumerated() {
+            let s = SuggestRules.score(it, now: now)
+            header(Self.meta(SuggestRules.rank(s), src[it.source] ?? (it.source.isEmpty ? nil : it.source), Self.ago(it.updated),
+                             it.count > 1 ? "\(it.count)번" : nil), red: s >= 0.6, top: stack.arrangedSubviews.isEmpty)
+            var buttons = [button("필요 없음") { [weak self] in self?.suggestions?.decide(it, "no"); self?.reload(force: true) },
+                           button("나중에") { [weak self] in self?.suggestions?.decide(it, "later"); self?.reload(force: true) }]
+            let go = button(it.actionLabel ?? (it.action == nil ? "확인" : "하기")) { [weak self] in
+                self?.suggestions?.decide(it, "do"); self?.reload(force: true)
+            }
+            go.keyEquivalent = n == 0 ? "\r" : ""
+            buttons.append(go)
+            add(group([[textBlock(it.title, detail: it.detail, key: "sg-" + it.file), actions(buttons)]], focused: n == 0))
+        }
     }
 
     private func improveView() {

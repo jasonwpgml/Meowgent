@@ -23,6 +23,8 @@ if pgrep -x ActLog >/dev/null; then
   osascript -e 'tell application id "com.jason.actlog" to quit' 2>/dev/null || pkill -x ActLog || true
   sleep 1
 fi
+# launchd 가 바로 다시 띄우지 않게 먼저 내린다 (복사하는 사이에 옛 앱이 떠서 서명 검사에 걸려 죽었다)
+[[ -f "$HOME/Library/LaunchAgents/$APP_ID.plist" ]] && launchctl bootout "gui/$(id -u)/$APP_ID" 2>/dev/null || true
 if pgrep -x Meowgent >/dev/null; then
   osascript -e "tell application id \"$APP_ID\" to quit" 2>/dev/null || pkill -x Meowgent || true
   sleep 1
@@ -33,7 +35,13 @@ cp -R "$BUNDLE" "$DEST"
 echo "설치됨: $DEST"
 [[ "${NO_OPEN:-}" == 1 ]] && exit 0
 # 자동 재시작(launchd)에 등록돼 있으면 launchd로 다시 띄우고, 아니면 그냥 연다
-if launchctl print "gui/$(id -u)/$APP_ID" >/dev/null 2>&1; then
+# kickstart 만 하면 서명 요구(LWCR)를 옛 바이너리 것으로 들고 있어 "Launch Constraint Violation"으로 못 뜰 때가 있다
+# (2026-11-11 빌드 뒤 앱이 안 떠 있었음, launchd: needs LWCR update · exit 78). 내렸다 다시 올려서 새 바이너리로 맞춘다.
+PLIST="$HOME/Library/LaunchAgents/$APP_ID.plist"
+if [[ -f "$PLIST" ]]; then
+  launchctl bootout "gui/$(id -u)/$APP_ID" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$PLIST"
+elif launchctl print "gui/$(id -u)/$APP_ID" >/dev/null 2>&1; then
   launchctl kickstart -k "gui/$(id -u)/$APP_ID"
 else
   open "$DEST"

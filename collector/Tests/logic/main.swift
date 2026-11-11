@@ -657,5 +657,29 @@ do {
     check("보류 + 관련 행동 → 관련 행동", ReactionRules.summary(["withheld", "acted"]) == "acted" && ReactionRules.summary(["withheld"]) == "withheld")
 }
 
+// MARK: 제안 목록
+do {
+    let base: Double = 1_794_000_000
+    let a = SuggestRules.parse(["title": "같은 요청 반복", "created": base, "value": 0.7, "half_life_h": 3, "key": "repeat:claude:1",
+                                "action": ["type": "chat", "value": "같이 찾아줘", "label": "같이 찾아보기"]], file: "repeat-claude-1.json")!
+    let b = SuggestRules.parse(["title": "앱 정리", "created": base, "value": 0.4, "half_life_h": 48, "count": 3], file: "c.json")!
+    check("제안 읽기", a.action == SuggestRules.Action(type: "chat", value: "같이 찾아줘") && a.actionLabel == "같이 찾아보기" && b.count == 3 && b.action == nil)
+    check("제목 없으면 안 읽음", SuggestRules.parse(["created": base], file: "x.json") == nil)
+    check("갓 생긴 쓸모 큰 것이 위", SuggestRules.sorted([b, a], now: base + 60).first?.title == "같은 요청 반복")
+    check("빨리 상하는 건 시간이 지나면 아래로", SuggestRules.sorted([a, b], now: base + 12 * 3600).first?.title == "앱 정리")
+    check("반복될수록 조금 위로", SuggestRules.score(b, now: base) > 0.4 + 0.15)
+    let snoozed = SuggestRules.parse(["title": "t", "created": base, "snooze_until": base + 100], file: "s.json")!
+    check("나중에 고른 건 하루 동안 안 보임", !SuggestRules.visible(snoozed, now: base + 50) && SuggestRules.visible(snoozed, now: base + 100))
+    check("파일 이름은 ASCII 글자·숫자·-_ 만", SuggestRules.fileName("repeat:claude:1794") == "repeat-claude-1794.json"
+          && SuggestRules.fileName("cleanup:/Applications/Foo Bar.app") == "cleanup--Applications-Foo-Bar-app.json"
+          && SuggestRules.fileName("정리:x") == "---x.json")
+    let first = SuggestRules.upsert(nil, ["key": "k", "title": "t"], now: base)
+    let again = SuggestRules.upsert(first.merging(["announced": base + 5]) { $1 }, ["key": "k", "title": "t"], now: base + 100)
+    check("같은 key 로 다시 넣으면 횟수만 늘고 처음 시각·말한 시각은 그대로",
+          first["count"] as? Int == 1 && again["count"] as? Int == 2 && again["created"] as? Double == base
+          && again["updated"] as? Double == base + 100 && again["announced"] as? Double == base + 5 && again["id"] as? String == "k")
+    check("중요도 이름", SuggestRules.rank(0.7) == "중요" && SuggestRules.rank(0.4) == "보통" && SuggestRules.rank(0.1) == "나중에 봐도 됨")
+}
+
 print(failed == 0 ? "\n모두 통과" : "\n실패 \(failed)건")
 exit(failed == 0 ? 0 : 1)

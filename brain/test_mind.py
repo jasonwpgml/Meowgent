@@ -697,6 +697,26 @@ m.st["last_event_ts"] = T0 - 6 * 3600
 m.on_silence(T0)
 check("앱이 꺼져 기록이 6시간 안 오면 일한 시간으로 안 셈", m.st["active_since"] == T0 and "long_focus" not in [s[0] for s in m.observe([])])
 
+# 같은 요청 반복 → 제안 목록 (suggest/)
+m, clock, data = make(T0)
+m.on_prompt(T0 - 300, "claude", "지금 이 대화 AgentHub로 옮길 수 있나?")
+m.on_prompt(T0 - 200, "chatgpt", "지금 이 대화 AgentHub로 옮겨줘")          # 다른 AI 는 따로 센다
+m.on_prompt(T0 - 120, "claude", "지금 이 대화 AgentHub로 옮겨줘")
+check("두 번째까지는 제안 안 함", not (data / "suggest").exists() or not list((data / "suggest").glob("*.json")))
+m.on_prompt(T0 - 30, "claude", "이 대화 AgentHub 프로젝트로 옮겨줘 제발")
+fs = list((data / "suggest").glob("*.json"))
+sg = json.loads(fs[0].read_text()) if fs else {}
+check("비슷한 요청 세 번째면 제안", len(fs) == 1 and sg.get("kind") == "repeat_request" and "Claude에 비슷한 요청을 3번" in sg.get("title", ""), sg)
+check("제안 파일 이름은 앱과 같은 규칙", fs and fs[0].name == M.suggest_file(sg["key"]) and fs[0].name.startswith("repeat-claude-"))
+check("하기 = 고양이에게 말 걸기, 한 마디도 있음", sg.get("action", {}).get("type") == "chat" and "번째 말하고" in sg.get("say", ""))
+m.on_prompt(T0 - 10, "claude", "지금 이 대화 AgentHub로 옮겨줘 진짜")
+sg2 = json.loads(fs[0].read_text())
+check("같은 묶음은 같은 파일에서 횟수만 늘림", len(list((data / "suggest").glob("*.json"))) == 1 and sg2["count"] == 2 and sg2["created"] == sg["created"], sg2)
+m2, _, data2 = make(T0)
+for i in range(4):
+    m2.on_prompt(T0 - 7200 + i * 10, "claude", "지금 이 대화 AgentHub로 옮겨줘")
+check("다시 훑는 옛 기록(30분 넘게 지난 것)은 제안 안 함", not (data2 / "suggest").exists())
+
 # 끝남 알림 홀드아웃 집계 (brain/holdout_report.py)
 import holdout_report
 rows = []

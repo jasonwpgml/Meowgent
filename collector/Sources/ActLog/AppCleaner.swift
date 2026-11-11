@@ -14,6 +14,10 @@ final class AppCleaner: NSObject {
 
     var notify: ((_ text: String, _ validUntil: Date) -> Void)?
     var changed: (() -> Void)?
+    /// 물을 때 제안 목록에도 넣는다 (말풍선 답 시간 30분이 지나도 나중에 한꺼번에 고르게). 답하거나 다시 쓰면 빠진다
+    var suggest: (([String: Any]) -> Void)?
+    var unsuggest: ((String) -> Void)?
+    static func suggestKey(_ path: String) -> String { "cleanup:" + path }
     private(set) var pending: Pending?
 
     private var lastTick = Date.distantPast
@@ -92,6 +96,7 @@ final class AppCleaner: NSObject {
             sessionOnly[path] = Date()
         }
         if pending?.key == path { resolve() }   // 다시 쓰기 시작했으면 물을 일이 없다
+        unsuggest?(Self.suggestKey(path))
     }
 
     /// ResourceWatch 가 새로 읽을 때마다 부른다
@@ -157,6 +162,9 @@ final class AppCleaner: NSObject {
         pending = Pending(key: c.key, name: c.name, reason: why, canAutomate: c.regular, until: until)
         Log.write("앱 정리(묻기): \(c.name) — \(why)")
         notify?("🧹 \(c.name), \(why)\n정리할까냥? (누르면 고른다냥)", until)
+        suggest?(["key": Self.suggestKey(c.key), "kind": "cleanup", "source": "cleaner", "title": "🧹 \(c.name) 정리할까냥",
+                  "detail": why + "\n정리는 앱에 종료를 부탁하는 것이라, 저장 안 한 게 있으면 그 앱이 먼저 묻는다.",
+                  "value": 0.4, "half_life_h": 48, "action": ["type": "cleanup", "value": c.key, "label": "정리하기"]])
         changed?()
     }
 
@@ -180,7 +188,17 @@ final class AppCleaner: NSObject {
             }
         }
         Log.write("앱 정리(답): \(p.name) → \(a)")
+        unsuggest?(Self.suggestKey(p.key))
         resolve()
+    }
+
+    /// 제안 목록에서 '정리하기'를 눌렀다: 아직 떠 있으면 종료를 부탁한다
+    func quitFromSuggestion(path: String) -> Bool {
+        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleURL?.path == path }) else { return false }
+        if pending?.key == path { pending = nil; changed?() }
+        quit(app, name: app.localizedName ?? URL(fileURLWithPath: path).lastPathComponent,
+             memBytes: latest?.everyApp[path]?.memBytes ?? 0, announce: false)
+        return true
     }
 
     private func resolve() {
