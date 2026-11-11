@@ -262,6 +262,21 @@ enum Resource {
         }
     }
 
+    // MARK: 메뉴바 아이콘 색
+
+    static let hotCPU: Double = 95            // 전체, 이 이상이면 빨강 (주황은 busyCPU)
+    static let iconWindow: TimeInterval = 30
+
+    /// 메뉴바 고양이 손 색 단계: 0 평소(흰색·검은색은 메뉴 막대가 정함) · 1 주황 · 2 빨강.
+    /// CPU 는 최근 30초 평균이라 잠깐 튀는 건 색을 안 바꾼다. 메모리는 macOS 압박 단계 그대로 (빠듯 = 주황, 심각 = 빨강).
+    static func iconLevel(_ history: [Sample], now: Date) -> Int {
+        guard let last = history.last else { return 0 }
+        let recent = history.filter { now.timeIntervalSince($0.at) <= iconWindow }
+        let avg = recent.isEmpty ? last.cpu : recent.reduce(0) { $0 + $1.cpu } / Double(recent.count)
+        let cpu = avg >= hotCPU ? 2 : (avg >= busyCPU ? 1 : 0)
+        return max(cpu, min(max(last.pressure, 0), 2))
+    }
+
     // MARK: 앱별로 나눈 막대 (맥 상태 카드)
 
     /// 막대 한 조각. key 가 빈 조각은 '나머지'(그 밖의 앱·시스템)
@@ -286,6 +301,31 @@ enum Resource {
         let rest = fill - sumBig * scale
         if rest / whole >= 0.005 { out.append(Slice(key: "", name: "", value: rest, fraction: rest / whole)) }
         return out
+    }
+
+    /// 여러 막대를 한 화면에 함께 보일 때: 색을 줄 앱은 keep 개까지만 고르고 (막대들에서 차지한 몫의 합이 큰 순),
+    /// 나머지 앱 조각은 각 막대의 '나머지' 조각으로 합친다. 색이 모자라 두 앱이 같은 색이 되는 일을 막는다.
+    static func fold(_ bars: [[Slice]], keep: Int) -> (keys: [String], bars: [[Slice]]) {
+        var share: [String: Double] = [:]
+        var order: [String] = []
+        for sl in bars.joined() where !sl.key.isEmpty {
+            if share[sl.key] == nil { order.append(sl.key) }
+            share[sl.key, default: 0] += sl.fraction
+        }
+        // 몫이 같으면 먼저 나온 앱이 앞 (정렬이 흔들리지 않게)
+        let keys = Array(order.enumerated().sorted { (share[$0.element]!, -$0.offset) > (share[$1.element]!, -$1.offset) }
+            .map(\.element).prefix(max(0, keep)))
+        let kept = Set(keys)
+        let out = bars.map { bar -> [Slice] in
+            var restValue = 0.0, restFraction = 0.0
+            var slices: [Slice] = []
+            for sl in bar {
+                if !sl.key.isEmpty && kept.contains(sl.key) { slices.append(sl) } else { restValue += sl.value; restFraction += sl.fraction }
+            }
+            if restFraction > 0 { slices.append(Slice(key: "", name: "", value: restValue, fraction: restFraction)) }
+            return slices
+        }
+        return (keys, out)
     }
 
     /// 앱마다 색 번호를 정한다. 한 번 받은 색은 계속 쓰고, 지금 보이는 앱끼리는 겹치지 않게 한다.

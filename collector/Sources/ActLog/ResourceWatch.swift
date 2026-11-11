@@ -27,6 +27,9 @@ final class ResourceWatch: NSObject {
     private(set) var active: [Resource.Alert] = []
     /// 지금 열려 있는 메뉴의 맥 상태 카드 (새로 읽을 때마다 다시 그린다)
     weak var card: ResourceCard?
+    /// 메뉴바 고양이 손 색 단계 (0 평소 · 1 주황 · 2 빨강). 바뀔 때만 onIconLevel 을 부른다
+    private(set) var iconLevel = 0
+    var onIconLevel: ((Int) -> Void)?
 
     static let interval: TimeInterval = 10
     static let fastInterval: TimeInterval = 2
@@ -104,6 +107,8 @@ final class ResourceWatch: NSObject {
         cleaner.observe(s, canAsk: alertsOn)
         dashboard.refresh()
         card?.update()
+        let level = Resource.iconLevel(history, now: s.at)
+        if level != iconLevel { iconLevel = level; onIconLevel?(level) }
         guard alertsOn else { return }
         if s.at.timeIntervalSince(lastCalmNotice) < Self.calmGap { due = due.filter(\.urgent) }
         guard let a = due.first else { return }

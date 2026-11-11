@@ -255,6 +255,19 @@ do {
     check("여럿이 나눠 꽉 채움", keys(sample([app("A", cpu: 60), app("B", cpu: 50)], cpu: 90)) == ["cpu:total"])
     check("메모리 빠듯·심각", keys(sample([], pressure: 1)) == ["memory:tight"] && keys(sample([], pressure: 2)) == ["memory:critical"])
 
+    // 메뉴바 아이콘 색
+    func at(_ sec: Double, cpu: Double, pressure: Int = 0) -> Resource.Sample {
+        var x = sample([], cpu: cpu, pressure: pressure); x.at = base + sec; return x
+    }
+    check("평소는 0", Resource.iconLevel([at(0, cpu: 40), at(10, cpu: 50)], now: base + 10) == 0)
+    check("잠깐 튄 CPU 는 무시", Resource.iconLevel([at(0, cpu: 30), at(10, cpu: 30), at(20, cpu: 99)], now: base + 20) == 0)
+    check("30초 평균이 85% 넘으면 주황", Resource.iconLevel([at(0, cpu: 88), at(10, cpu: 90), at(20, cpu: 86)], now: base + 20) == 1)
+    check("30초 평균이 95% 넘으면 빨강", Resource.iconLevel([at(0, cpu: 97), at(10, cpu: 99), at(20, cpu: 96)], now: base + 20) == 2)
+    check("30초보다 오래된 건 안 봄", Resource.iconLevel([at(0, cpu: 10), at(40, cpu: 90), at(50, cpu: 92)], now: base + 50) == 1)
+    check("메모리 빠듯 = 주황, 심각 = 빨강", Resource.iconLevel([at(0, cpu: 10, pressure: 1)], now: base) == 1
+          && Resource.iconLevel([at(0, cpu: 10, pressure: 2)], now: base) == 2)
+    check("기록 없으면 0", Resource.iconLevel([], now: base) == 0)
+
     // 앱별로 나눈 막대
     let items: [(key: String, name: String, value: Double)] = [("a", "A", 300), ("b", "B", 100), ("c", "C", 5), ("d", "D", 0)]
     let sl = Resource.slices(items, whole: 1000, filled: 500, top: 5)
@@ -267,6 +280,14 @@ do {
     check("찬 양을 모르면 앱 합", sumOnly.map(\.key) == ["a", "b", ""] && abs(sumOnly.reduce(0) { $0 + $1.fraction } - 0.405) < 1e-9, "\(sumOnly)")
     check("막대 끝을 넘지 않음", Resource.slices([("a", "A", 900), ("b", "B", 900)], whole: 1000).reduce(0) { $0 + $1.fraction } <= 1 + 1e-9)
     check("상위 몇 개만", Resource.slices([("a", "A", 50), ("b", "B", 40), ("c", "C", 30)], whole: 100, top: 2).map(\.key) == ["a", "b", ""])
+    let barA = [Resource.Slice(key: "a", name: "A", value: 30, fraction: 0.3), Resource.Slice(key: "b", name: "B", value: 20, fraction: 0.2),
+                Resource.Slice(key: "", name: "", value: 5, fraction: 0.05)]
+    let barB = [Resource.Slice(key: "c", name: "C", value: 400, fraction: 0.4), Resource.Slice(key: "a", name: "A", value: 100, fraction: 0.1)]
+    let folded = Resource.fold([barA, barB], keep: 2)
+    check("색은 몫이 큰 앱만 (막대들 합)", folded.keys == ["a", "c"], "\(folded.keys)")
+    check("나머지 앱은 기타로 합침", folded.bars[0].map(\.key) == ["a", ""] && abs(folded.bars[0][1].fraction - 0.25) < 1e-9
+          && folded.bars[0][1].value == 25 && folded.bars[1].map(\.key) == ["c", "a"], "\(folded.bars)")
+    check("다 들어가면 그대로", Resource.fold([barA], keep: 5).bars[0] == barA)
     var colors = Resource.assignColors(["a", "b", "c"], current: [:], palette: 8)
     check("보이는 앱끼리 색이 안 겹침", Set(["a", "b", "c"].compactMap { colors[$0] }).count == 3, "\(colors)")
     let keep = colors

@@ -130,7 +130,12 @@ final class ResourceCard: NSView {
         return out
     }
 
-    private static func color(_ level: Int) -> NSColor { level >= 2 ? .systemRed : (level == 1 ? .systemOrange : .systemGreen) }
+    private static func color(_ level: Int) -> NSColor { level >= 2 ? .systemRed : (level == 1 ? .systemOrange : .secondaryLabelColor) }
+    /// 한 색 막대(저장공간·배터리·GPU): 평소엔 차분한 잉크색, 문제가 있을 때만 주황·빨강
+    private static func barColor(_ level: Int) -> NSColor { level > 0 ? color(level) : NSColor.labelColor.withAlphaComponent(0.42) }
+    private static let trackColor = NSColor.labelColor.withAlphaComponent(0.08)
+    /// 앱별 막대의 '기타'
+    private static let restColor = NSColor.labelColor.withAlphaComponent(0.24)
 
     private func text(_ s: String, _ rect: NSRect, size: CGFloat, weight: NSFont.Weight = .regular, color: NSColor = .labelColor,
                       align: NSTextAlignment = .left, digits: Bool = false) {
@@ -164,10 +169,12 @@ final class ResourceCard: NSView {
         hint.draw(at: NSPoint(x: w - pad - hs.width, y: 8))
 
         // 막대 줄
-        let all = rows(s)
-        var legend: [Resource.Slice] = []
-        for sl in all.flatMap(\.slices) where !sl.key.isEmpty && !legend.contains(where: { $0.key == sl.key }) { legend.append(sl) }
-        AppSlices.assignColors(all.compactMap(\.metric))
+        // 색은 몫이 큰 앱 다섯까지만, 나머지 앱은 각 막대의 '기타'로 합친다
+        var all = rows(s)
+        let prepared = AppSlices.prepare(all.compactMap(\.metric))
+        var mi = 0
+        for i in all.indices where all[i].metric != nil { all[i].metric = prepared.metrics[mi]; mi += 1 }
+        let legend = prepared.legend
         hits = []
         if let h = hoverSlice, h.row >= all.count || h.index >= all[h.row].slices.count { hoverSlice = nil }
 
@@ -176,18 +183,19 @@ final class ResourceCard: NSView {
         for (ri, r) in all.enumerated() {
             let c = Self.color(r.level)
             text(r.name, NSRect(x: pad, y: y, width: Self.nameW, height: 16), size: 12, weight: .medium)
-            let track = NSRect(x: barX, y: y + 5, width: barW, height: 7)
-            NSColor.quaternaryLabelColor.setFill()
-            NSBezierPath(roundedRect: track, xRadius: 3.5, yRadius: 3.5).fill()
-            if r.slices.isEmpty {
-                var fill = track
-                fill.size.width = max(track.height, track.width * CGFloat(max(0, min(1, r.fraction))))
-                c.setFill()
-                NSBezierPath(roundedRect: fill, xRadius: 3.5, yRadius: 3.5).fill()
-            } else if let m = r.metric {
-                let spans = AppSlices.draw(m, in: track, hover: hoverSlice?.row == ri ? hoverSlice?.index : nil, rest: .tertiaryLabelColor)
+            let track = NSRect(x: barX, y: y + 4, width: barW, height: 8)
+            if let m = r.metric, !m.slices.isEmpty {
+                let spans = AppSlices.draw(m, in: track, hover: hoverSlice?.row == ri ? hoverSlice?.index : nil,
+                                           rest: Self.restColor, empty: Self.trackColor)
                 // 마우스로 맞히기 쉽게 막대 위아래로 넉넉히
                 for (i, sp) in spans.enumerated() { hits.append((NSRect(x: sp.lowerBound, y: y, width: sp.upperBound - sp.lowerBound, height: 17), ri, i)) }
+            } else {
+                Self.trackColor.setFill()
+                NSBezierPath(roundedRect: track, xRadius: 4, yRadius: 4).fill()
+                var fill = track
+                fill.size.width = max(track.height, track.width * CGFloat(max(0, min(1, r.fraction))))
+                Self.barColor(r.level).setFill()
+                NSBezierPath(roundedRect: fill, xRadius: 4, yRadius: 4).fill()
             }
             text(r.value, NSRect(x: w - pad - Self.valueW, y: y, width: Self.valueW, height: 16), size: 12, weight: .semibold,
                  color: r.level > 0 ? c : .labelColor, align: .right, digits: true)
@@ -204,7 +212,8 @@ final class ResourceCard: NSView {
             } else {
                 text(r.detail, detailRect, size: 10.5, color: .secondaryLabelColor, digits: true)
             }
-            if sparkW > 0 { drawSpark(r.spark, max: r.sparkMax, in: NSRect(x: w - pad - sparkW, y: y + 17, width: sparkW, height: 12), color: c) }
+            if sparkW > 0 { drawSpark(r.spark, max: r.sparkMax, in: NSRect(x: w - pad - sparkW, y: y + 17, width: sparkW, height: 12),
+                                      color: r.level > 0 ? c : .tertiaryLabelColor) }
             y += Self.rowH
         }
 
@@ -222,7 +231,8 @@ final class ResourceCard: NSView {
         }
         var x = pad
         let font = NSFont.systemFont(ofSize: 11)
-        for sl in legend {
+        for l in legend {
+            let sl = Resource.Slice(key: l.key, name: l.name, value: 0, fraction: 0)
             let nameW = ceil((sl.name as NSString).size(withAttributes: [.font: font]).width)
             guard x + 11 + nameW <= w - pad else { break }
             sliceColor(sl).setFill()
@@ -232,7 +242,7 @@ final class ResourceCard: NSView {
         }
     }
 
-    private func sliceColor(_ sl: Resource.Slice) -> NSColor { AppSlices.color(sl, rest: .tertiaryLabelColor) }
+    private func sliceColor(_ sl: Resource.Slice) -> NSColor { AppSlices.color(sl, rest: Self.restColor) }
 
     private func drawSpark(_ v: [Double], max m: Double, in r: NSRect, color: NSColor) {
         guard v.count > 1, m > 0 else { return }

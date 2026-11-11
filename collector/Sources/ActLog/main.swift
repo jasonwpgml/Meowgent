@@ -297,6 +297,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         resources.cleaner.unsuggest = { [weak self] k in self?.suggestions.resolve(key: k) }
         suggestions.start()
         resources.dataDir = dataDir
+        resources.onIconLevel = { [weak self] _ in self?.updateStatusIcon() }
         resources.start()
         p.start()
         pet = p
@@ -334,18 +335,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return img
     }()
 
+    /// 바쁠 때 쓰는 색칠한 손. 메뉴 막대는 템플릿 그림에 준 contentTintColor 를 무시하고 어둡게 그려서
+    /// (2026-11-11 화면으로 확인) 템플릿이 아닌 그림에 직접 색을 칠한다
+    static let orangePaw = tinted(menuBarPaw, .systemOrange)
+    static let redPaw = tinted(menuBarPaw, .systemRed)
+    private static func tinted(_ img: NSImage?, _ color: NSColor) -> NSImage? {
+        guard let img else { return nil }
+        let out = NSImage(size: img.size, flipped: false) { r in
+            img.draw(in: r)
+            color.set()
+            r.fill(using: .sourceAtop)
+            return true
+        }
+        out.isTemplate = false
+        return out
+    }
+
     func updateStatusIcon() {
         let s = Context.shared.snapshot
         let ok = axStarted && tap.isEnabled
         let tip = s.paused ? (recordingEnabled ? "Meowgent: 일시정지" : "Meowgent: 고양이만 (기록 꺼짐)") : (ok ? "Meowgent: 기록 중" : "Meowgent: 권한 필요")
         // 고양이 손: 기록 중 = 또렷하게, 일시정지 = 흐리게, 권한 필요 = 옆에 "!"
+        // 색: 평소엔 메뉴 막대 기본색(흰색·검은색), 맥이 바쁘면 주황, 많이 바쁘면 빨강 (CPU 30초 평균·메모리 압박)
         guard let button = statusItem?.button else { return }
-        button.image = Self.menuBarPaw
-        button.image?.accessibilityDescription = tip
+        let level = resources.iconLevel
+        let busy = level >= 2 ? " · 맥이 많이 바쁘다냥" : (level == 1 ? " · 맥이 바쁘다냥" : "")
+        button.image = level >= 2 ? Self.redPaw : (level == 1 ? Self.orangePaw : Self.menuBarPaw)
+        button.image?.accessibilityDescription = tip + busy
         button.imagePosition = .imageLeading
         button.appearsDisabled = s.paused
         button.title = (!s.paused && !ok) ? "!" : ""
-        button.toolTip = tip
+        button.toolTip = tip + busy
     }
 
     /// 메뉴 막대 메뉴: 맥 상태 카드 → 기록 상태 → 자주 쓰는 것 → 설정 묶음 → 앱

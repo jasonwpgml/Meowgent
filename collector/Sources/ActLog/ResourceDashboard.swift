@@ -146,19 +146,20 @@ final class ResourceDashboard: NSObject {
         let kind = focus?.kind
 
         let cpuBar = AppSlices.cpu(s), memBar = AppSlices.memory(s), powerBar = AppSlices.power(s)
-        AppSlices.assignColors([cpuBar, memBar] + (powerBar.map { [$0] } ?? []))
+        // 색은 몫이 큰 앱 다섯까지만, 나머지 앱은 각 막대의 '기타'로 (메뉴 카드와 같은 규칙·같은 색)
+        let prepared = AppSlices.prepare([cpuBar, memBar] + (powerBar.map { [$0] } ?? [])).metrics
         rows.cpu.set(value: "\(Int(s.cpu))%", fraction: s.cpu / 100, level: s.cpu >= Resource.busyCPU ? 1 : 0,
-                     detail: "코어 \(s.cores)개", spark: hist.map(\.cpu), sparkMax: 100, focused: kind == .cpu, metric: cpuBar)
+                     detail: "코어 \(s.cores)개", spark: hist.map(\.cpu), sparkMax: 100, focused: kind == .cpu, metric: prepared[0])
         rows.memory.set(value: "\(Int(s.memUsed))%", fraction: s.memUsed / 100, level: s.pressure,
                         detail: "압박 \(Resource.pressureName[min(s.pressure, 2)]) · 스왑 \(Resource.bytes(s.swapBytes))",
-                        spark: hist.map(\.memUsed), sparkMax: 100, focused: kind == .memory, metric: memBar)
+                        spark: hist.map(\.memUsed), sparkMax: 100, focused: kind == .memory, metric: prepared[1])
         // 전력: 배터리로 쓸 땐 배터리에서 끄는 전력, 전원에 꽂혀 있으면 앱들이 쓰는 전력 (추정)
         let watts = AppSlices.totalWatts(s)
         let power = hist.map(AppSlices.totalWatts)
         let focusKey = focus?.key ?? ""
         rows.power.set(value: (s.watts != nil ? "" : "약 ") + Resource.watts(watts), fraction: watts / max(30, watts), level: 0,
                        detail: s.watts != nil ? "배터리에서 끄는 전력 · 앱별은 추정" : "앱들이 쓰는 전력 (추정)",
-                       spark: power, sparkMax: max(30, power.max() ?? 0), focused: focusKey.hasPrefix("energy:"), metric: powerBar)
+                       spark: power, sparkMax: max(30, power.max() ?? 0), focused: focusKey.hasPrefix("energy:"), metric: powerBar == nil ? nil : prepared[2])
         rows.disk.isHidden = s.disk == nil
         if let d = s.disk {
             rows.disk.set(value: "\(Resource.diskSize(d.free)) 남음", fraction: d.usedFraction, level: Resource.diskLevel(d),
@@ -465,7 +466,7 @@ private final class MetricRow: NSStackView {
         detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let top = NSStackView(views: [name, NSView(), value])
         let bottom = NSStackView(views: [detail, NSView(), spark])
-        bar.heightAnchor.constraint(equalToConstant: 5).isActive = true
+        bar.heightAnchor.constraint(equalToConstant: 8).isActive = true
         spark.widthAnchor.constraint(equalToConstant: 96).isActive = true
         spark.heightAnchor.constraint(equalToConstant: 18).isActive = true
         for v in [top, bar, bottom] {
@@ -484,11 +485,12 @@ private final class MetricRow: NSStackView {
         value.textColor = level > 0 ? c : ResourceDashboard.cream
         name.textColor = focused ? ResourceDashboard.amber : ResourceDashboard.cream
         plainDetail = d
-        bar.fraction = max(0, min(1, fraction)); bar.color = c
+        // 평소엔 차분한 크림색, 문제가 있을 때만 주황·빨강
+        bar.fraction = max(0, min(1, fraction)); bar.color = level > 0 ? c : ResourceDashboard.cream.withAlphaComponent(0.5)
         bar.onHover = { [weak self] in self?.showDetail() }
         bar.metric = metric
         showDetail()
-        spark.values = s; spark.maxValue = sparkMax; spark.color = c
+        spark.values = s; spark.maxValue = sparkMax; spark.color = level > 0 ? c : ResourceDashboard.cream.withAlphaComponent(0.45)
     }
 
     /// 조각에 마우스가 있으면 그 앱 이름과 양, 아니면 원래 설명
@@ -503,7 +505,8 @@ private final class MetricRow: NSStackView {
 
 /// 한 색 막대, 또는 metric 이 있으면 앱별 색 조각 막대
 private final class Bar: NSView {
-    static let rest = ResourceDashboard.cream.withAlphaComponent(0.35)
+    static let rest = ResourceDashboard.cream.withAlphaComponent(0.3)
+    static let track = ResourceDashboard.cream.withAlphaComponent(0.1)
     var fraction: Double = 0 { didSet { if fraction != oldValue { needsDisplay = true } } }
     var color: NSColor = ResourceDashboard.calm { didSet { needsDisplay = true } }
     /// 새로 읽을 때마다 바뀐다. 마우스가 그대로 있어도 그 자리의 조각을 다시 찾는다
@@ -514,12 +517,12 @@ private final class Bar: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let r = bounds.height / 2
-        ResourceDashboard.cream.withAlphaComponent(0.12).setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: r, yRadius: r).fill()
         if let m = metric, !m.slices.isEmpty {
-            AppSlices.draw(m, in: bounds, hover: hover, rest: Self.rest)
+            AppSlices.draw(m, in: bounds, hover: hover, rest: Self.rest, empty: Self.track)
             return
         }
+        Self.track.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: r, yRadius: r).fill()
         color.setFill()
         NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: max(bounds.height, bounds.width * fraction), height: bounds.height), xRadius: r, yRadius: r).fill()
     }

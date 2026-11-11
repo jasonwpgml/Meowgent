@@ -48,16 +48,31 @@ enum AppSlices {
 
     // MARK: 색
 
-    /// 상태(초록·주황·빨강)와 헷갈리지 않게 그 셋은 뺐다
-    static let palette: [NSColor] = [.systemBlue, .systemPurple, .systemPink, .systemTeal, .systemYellow, .systemIndigo, .systemBrown]
-    /// 앱 → 색 번호. 앱이 켜져 있는 동안 들고 있는다
+    /// 차분한 보석 톤 다섯 가지 (파랑·브론즈·청록·와인·보라). 상태색(초록·주황·빨강)과 겹치지 않게 골랐고,
+    /// 밝은·어두운 바탕 모두에서 어느 두 색을 붙여도 색약 시뮬레이션 ΔE 13 이상 (dataviz 검사기, 모든 쌍 기준).
+    /// 어두운 쪽은 같은 색을 어두운 바탕에 맞춰 조금 밝힌 값이다.
+    static let palette: [NSColor] = [
+        dynamic(light: 0x5185E9, dark: 0x578CF0), dynamic(light: 0x977017, dark: 0x9E7620), dynamic(light: 0x25A897, dark: 0x20A594),
+        dynamic(light: 0x853750, dark: 0x9E3B5D), dynamic(light: 0x6D41A9, dark: 0x7347AF),
+    ]
+    private static func dynamic(light: Int, dark: Int) -> NSColor {
+        func rgb(_ v: Int) -> NSColor {
+            NSColor(srgbRed: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255, blue: CGFloat(v & 0xFF) / 255, alpha: 1)
+        }
+        return NSColor(name: nil) { $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? rgb(dark) : rgb(light) }
+    }
+    /// 앱 → 색 번호. 앱이 켜져 있는 동안 들고 있는다 (메뉴 카드·대시보드 같이)
     private(set) static var colorOf: [String: Int] = [:]
 
-    /// 지금 보이는 앱들 (앞에 있을수록 먼저) 끼리 색이 안 겹치게 정한다
-    static func assignColors(_ metrics: [Metric]) {
-        var keys: [String] = []
-        for sl in metrics.flatMap(\.slices) where !sl.key.isEmpty && !keys.contains(sl.key) { keys.append(sl.key) }
-        colorOf = Resource.assignColors(keys, current: colorOf, palette: palette.count)
+    /// 한 화면의 막대들을 그리기 전에: 색은 몫이 큰 앱 다섯까지만 주고 나머지는 '기타'로 합친 뒤 색을 정한다.
+    /// 돌려주는 legend 는 색을 받은 앱 (몫이 큰 순)
+    static func prepare(_ metrics: [Metric]) -> (legend: [(key: String, name: String)], metrics: [Metric]) {
+        let folded = Resource.fold(metrics.map(\.slices), keep: palette.count)
+        var out = metrics
+        for i in out.indices { out[i].slices = folded.bars[i] }
+        colorOf = Resource.assignColors(folded.keys, current: colorOf, palette: palette.count)
+        let names = Dictionary(metrics.flatMap(\.slices).map { ($0.key, $0.name) }, uniquingKeysWith: { a, _ in a })
+        return (folded.keys.map { ($0, names[$0] ?? $0) }, out)
     }
 
     static func color(_ sl: Resource.Slice, rest: NSColor) -> NSColor {
@@ -89,26 +104,34 @@ enum AppSlices {
 
     // MARK: 그리기
 
-    /// 찬 부분을 둥근 막대 모양으로 잘라 두고 조각을 차례로 칠한다. 조각 사이 1pt 는 비워 경계가 보이게 한다.
-    /// hover 조각이 있으면 나머지는 흐리게. 돌려주는 값은 조각마다 차지한 x 범위 (마우스 맞히기용)
+    /// 바깥 끝만 둥근 막대 하나 안에 조각을 차례로 놓는다. 조각 사이와 빈 칸 앞은 2pt 를 비워 바탕이 보이게 한다
+    /// (테두리를 그리지 않고 틈으로 나눈다). hover 조각이 있으면 나머지는 흐리게.
+    /// 돌려주는 값은 조각마다 차지한 x 범위 (마우스 맞히기용)
     @discardableResult
-    static func draw(_ m: Metric, in track: NSRect, hover: Int?, rest: NSColor) -> [ClosedRange<CGFloat>] {
-        let filledW = CGFloat(m.filled) * track.width
-        guard filledW > 0 else { return [] }
-        let radius = track.height / 2
+    static func draw(_ m: Metric, in track: NSRect, hover: Int?, rest: NSColor, empty: NSColor) -> [ClosedRange<CGFloat>] {
+        let gap: CGFloat = 2
         NSGraphicsContext.saveGraphicsState()
-        var clip = track
-        clip.size.width = max(track.height, filledW)
-        NSBezierPath(roundedRect: clip, xRadius: radius, yRadius: radius).addClip()
+        NSBezierPath(roundedRect: track, xRadius: track.height / 2, yRadius: track.height / 2).addClip()
         var x = track.minX
         var spans: [ClosedRange<CGFloat>] = []
         for (i, sl) in m.slices.enumerated() {
             let w = track.width * CGFloat(sl.fraction)
-            let gap: CGFloat = i < m.slices.count - 1 && w > 3 ? 1 : 0
-            color(sl, rest: rest).withAlphaComponent(hover != nil && hover != i ? 0.35 : 1).setFill()
-            NSRect(x: x, y: track.minY, width: max(0, w - gap), height: track.height).fill()
+            let atEnd = x + w >= track.maxX - 0.5
+            let drawn = w > gap * 2 && !atEnd ? w - gap : w      // 아주 얇은 조각·끝까지 찬 조각은 틈을 두지 않는다
+            // 흐리게 할 땐 색의 알파를 바꾸지 않고 그리기 알파를 곱한다 ('기타'처럼 원래 반투명인 색이 진해지지 않게)
+            let ctx = NSGraphicsContext.current?.cgContext
+            ctx?.saveGState()
+            if hover != nil && hover != i { ctx?.setAlpha(0.4) }
+            color(sl, rest: rest).setFill()
+            NSRect(x: x, y: track.minY, width: max(0, drawn), height: track.height).fill()
+            ctx?.restoreGState()
             spans.append(x...(x + max(w, 2)))
             x += w
+        }
+        // 빈 칸: 마지막 조각 뒤 틈(이미 비워 둠) 다음부터 끝까지
+        if x < track.maxX - 1 {
+            empty.setFill()
+            NSRect(x: x, y: track.minY, width: track.maxX - x, height: track.height).fill()
         }
         NSGraphicsContext.restoreGraphicsState()
         return spans
