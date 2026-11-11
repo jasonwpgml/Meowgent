@@ -39,13 +39,17 @@ enum AppSlices {
     /// 맥이 직접 잰 값인지 (아니면 앱별 추정의 합)
     static func measured(_ s: Resource.Sample) -> Bool { s.watts != nil || s.power?.systemW != nil }
 
-    /// 전력 줄 오른쪽 숫자와 설명. 전원 연결 중이면 "소모 / 충전" 과 충전기 최대 W
+    /// 전력 줄 오른쪽 숫자와 설명. 전원 연결 중에 충전하고 있으면 "소모 / 충전" 과 충전기 최대 W.
+    /// 충전하지 않을 때 (꽉 찼거나 macOS 가 배터리 보호로 멈춤) 는 "0W" 대신 소모만 보이고 설명에 그 상태를 적는다
     static func powerTexts(_ s: Resource.Sample) -> (value: String, detail: String) {
         if let w = s.watts { return (Resource.watts(w), "배터리에서 끄는 전력 · 앱별은 추정") }
         if let p = s.power, let sys = p.systemW {
-            let charge = p.chargeW ?? 0
-            let detail = "소모 / 충전" + (p.adapterW.map { " · 충전기 최대 \($0)W" } ?? "")
-            return ("\(Resource.watts(sys)) / \(charge < 0.05 ? "0W" : Resource.watts(charge))", detail)
+            let adapter = p.adapterW.map { " · 충전기 최대 \($0)W" } ?? ""
+            if let charge = p.chargeW, charge >= 0.05 {
+                return ("\(Resource.watts(sys)) / \(Resource.watts(charge))", "소모 / 충전" + adapter)
+            }
+            let state = (s.battery?.percent ?? 0) >= 99 ? "완충" : "충전 안 함 (배터리 보호 등)"
+            return (Resource.watts(sys), "소모 · " + state + adapter)
         }
         return ("약 " + Resource.watts(appWatts(s)), "앱들이 쓰는 전력 (추정)")
     }

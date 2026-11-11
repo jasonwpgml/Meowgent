@@ -2,7 +2,9 @@ import AppKit
 
 /// 메뉴바 고양이 손 = 배터리 표시.
 /// 회색 손이 배터리 양만큼 아래부터 차고, 전원이 연결돼 있으면 (충전 중이든 아니든) 큰 젤리 자리(원래 비어 있는 곳)에 번개,
-/// 손 맨 아래 (번개 아래, 손 아래 가장자리에 걸쳐) 에 배터리 숫자를 흰 글씨·검은 테두리로.
+/// 손 맨 아래 (번개 아래, 손 아래 가장자리에 걸쳐) 에 배터리 숫자를 손과 반대 색 글씨 + 손 색 테두리로
+/// (어두운 메뉴 막대 = 흰 손 위 검은 글씨·흰 테두리, 밝은 메뉴 막대 = 검은 손 위 흰 글씨·검은 테두리).
+/// 흰 글씨·검은 테두리 하나로만 하니 흰 손 위에서 잘 안 보였다 (2026-11-11 사용자).
 /// 숫자를 손 옆에 붙이면 항목이 넓어져 꽉 찬 메뉴 막대에서 노치 뒤로 숨어서 (2026-11-11 확인) 손 안에 넣었다.
 /// 채워진 부분의 색은 맥이 얼마나 바쁜지: 평소엔 메뉴 막대 글자색(흰색·검은색), 바쁘면 주황, 많이 바쁘면 빨강.
 /// 배터리가 없는 맥은 그냥 손만 (평소 템플릿 / 바쁘면 색칠).
@@ -16,10 +18,11 @@ enum MenuBarIcon {
 
     /// 숫자가 손 아래로 걸쳐 내려갈 자리 (pt). 그림은 15×18 손 + 이만큼
     private static let below: CGFloat = 3
-    private static let numberSize: CGFloat = 7
+    /// 7pt 는 잘 안 보였고 9pt 는 번개를 덮어서 8pt (2026-11-11 시안 비교)
+    private static let numberSize: CGFloat = 8
 
     /// percent 가 nil 이면 배터리 없는 맥: 손만 (fill 이 nil 이면 템플릿).
-    /// 배터리가 있으면 흰 글씨·검은 테두리 숫자 때문에 템플릿으로 못 그려서 (템플릿은 알파만 본다)
+    /// 배터리가 있으면 두 색 숫자 때문에 템플릿으로 못 그려서 (템플릿은 알파만 본다)
     /// 메뉴 막대가 어두운지(dark) 보고 손 색을 직접 정한다. 메뉴 막대 밝기가 바뀌면 다시 불러야 한다.
     /// 메뉴 막대는 템플릿 그림에 준 contentTintColor 도 무시해서 (2026-11-11 확인) 바쁠 때 색도 직접 칠한다
     static func image(percent: Int?, plugged: Bool, fill: NSColor?, dark: Bool) -> NSImage? {
@@ -43,13 +46,19 @@ enum MenuBarIcon {
                 ink.setFill()
                 bolt(in: pr).fill()
             }
-            // 숫자: 검은 테두리를 먼저, 흰 글씨를 위에. 아랫선을 그림 바닥 바로 위에 두면 몸통이 손 아래 가장자리에 걸친다
-            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: numberSize, weight: .heavy), .kern: -0.2]
+            // 숫자: 테두리를 먼저, 글씨를 위에. 아랫선을 그림 바닥 바로 위에 두면 몸통이 손 아래 가장자리에 걸친다
+            // 손 폭을 넘으면 (100) 넘지 않게 글자를 줄인다 (넘친 부분은 그림 밖이라 잘린다)
             let text = "\(percent)" as NSString
+            var attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: numberSize, weight: .heavy), .kern: -0.2]
+            let natural = text.size(withAttributes: attrs).width
+            if natural > r.width - 1 {
+                attrs[.font] = NSFont.systemFont(ofSize: numberSize * (r.width - 1) / natural, weight: .heavy)
+            }
             let w = text.size(withAttributes: attrs).width
             let at = NSPoint(x: r.midX - w / 2, y: r.minY + 0.5)
-            text.draw(at: at, withAttributes: attrs.merging([.strokeColor: NSColor.black, .strokeWidth: 10.0]) { $1 })
-            text.draw(at: at, withAttributes: attrs.merging([.foregroundColor: NSColor.white]) { $1 })
+            let (letter, edge): (NSColor, NSColor) = dark ? (.black, .white) : (.white, .black)
+            text.draw(at: at, withAttributes: attrs.merging([.strokeColor: edge, .strokeWidth: 12.0]) { $1 })
+            text.draw(at: at, withAttributes: attrs.merging([.foregroundColor: letter]) { $1 })
             return true
         }
         out.isTemplate = false
