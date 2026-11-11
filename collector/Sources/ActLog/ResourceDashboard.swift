@@ -174,7 +174,7 @@ final class ResourceDashboard: NSObject {
             let low = b.onBattery && b.percent <= 20
             rows.battery.set(value: "\(b.percent)%", fraction: Double(b.percent) / 100, level: b.onBattery && b.percent <= 10 ? 2 : (low ? 1 : 0),
                              detail: Self.batteryLine(b, watts: s.watts), spark: hist.compactMap { $0.battery.map { Double($0.percent) } },
-                             sparkMax: 100, focused: focusKey.hasPrefix("battery:"))
+                             sparkMax: 100, focused: focusKey.hasPrefix("battery:"), risk: true)
         }
         rows.gpu.isHidden = s.gpu == nil
         if let g = s.gpu {
@@ -478,15 +478,16 @@ private final class MetricRow: NSStackView {
 
     private var plainDetail = ""
 
+    /// risk: 배터리처럼 위험도를 보여 주는 막대는 평소에도 초록 (저장공간은 평소 크림색)
     func set(value v: String, fraction: Double, level: Int, detail d: String, spark s: [Double], sparkMax: Double, focused: Bool,
-             metric: AppSlices.Metric? = nil) {
+             metric: AppSlices.Metric? = nil, risk: Bool = false) {
         let c = ResourceDashboard.color(level)
         value.stringValue = v
-        value.textColor = level > 0 ? c : ResourceDashboard.cream
+        value.textColor = c   // 오른쪽 숫자는 모든 줄이 위험도대로 초록·주황·빨강
         name.textColor = focused ? ResourceDashboard.amber : ResourceDashboard.cream
         plainDetail = d
-        // 평소엔 차분한 크림색, 문제가 있을 때만 주황·빨강
-        bar.fraction = max(0, min(1, fraction)); bar.color = level > 0 ? c : ResourceDashboard.cream.withAlphaComponent(0.5)
+        // 평소엔 차분한 크림색 (위험도 막대는 초록), 문제가 있을 때만 주황·빨강
+        bar.fraction = max(0, min(1, fraction)); bar.color = level > 0 || risk ? c : ResourceDashboard.cream.withAlphaComponent(0.5)
         bar.onHover = { [weak self] in self?.showDetail() }
         bar.metric = metric
         showDetail()

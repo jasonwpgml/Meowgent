@@ -33,6 +33,8 @@ final class ResourceCard: NSView {
         var sparkMax: Double = 100
         /// 앱별 조각 (없으면 fraction 만큼 한 색으로 채운다)
         var metric: AppSlices.Metric?
+        /// 배터리처럼 위험도를 보여 주는 막대: 평소에도 초록 (저장공간은 평소 차분한 잉크색, 사용자 요청)
+        var risk = false
         var slices: [Resource.Slice] { metric?.slices ?? [] }
     }
 
@@ -121,7 +123,7 @@ final class ResourceCard: NSView {
         if let b = s.battery {
             let level = b.onBattery && b.percent <= 10 ? 2 : (b.onBattery && b.percent <= 20 ? 1 : 0)
             out.append(Row(name: "배터리", value: "\(b.percent)%", fraction: Double(b.percent) / 100, level: level,
-                           detail: ResourceDashboard.batteryLine(b, watts: s.watts)))
+                           detail: ResourceDashboard.batteryLine(b, watts: s.watts), risk: true))
         }
         if let g = s.gpu {
             out.append(Row(name: "GPU", value: "\(Int(g))%", fraction: g / 100, level: g >= Resource.busyGPU ? 1 : 0,
@@ -131,8 +133,12 @@ final class ResourceCard: NSView {
     }
 
     private static func color(_ level: Int) -> NSColor { level >= 2 ? .systemRed : (level == 1 ? .systemOrange : .secondaryLabelColor) }
-    /// 한 색 막대(저장공간·배터리·GPU): 평소엔 차분한 잉크색, 문제가 있을 때만 주황·빨강
-    private static func barColor(_ level: Int) -> NSColor { level > 0 ? color(level) : NSColor.labelColor.withAlphaComponent(0.42) }
+    /// 오른쪽 숫자: 모든 줄이 위험도대로 초록·주황·빨강
+    private static func valueColor(_ level: Int) -> NSColor { level > 0 ? color(level) : .systemGreen }
+    /// 한 색 막대: 배터리는 위험도대로 초록·주황·빨강, 저장공간·GPU 는 평소 차분한 잉크색이고 문제 있을 때만 주황·빨강
+    private static func barColor(_ level: Int, risk: Bool) -> NSColor {
+        level > 0 ? color(level) : (risk ? .systemGreen : NSColor.labelColor.withAlphaComponent(0.42))
+    }
     private static let trackColor = NSColor.labelColor.withAlphaComponent(0.08)
     /// 앱별 막대의 '기타'
     private static let restColor = NSColor.labelColor.withAlphaComponent(0.24)
@@ -194,11 +200,11 @@ final class ResourceCard: NSView {
                 NSBezierPath(roundedRect: track, xRadius: 4, yRadius: 4).fill()
                 var fill = track
                 fill.size.width = max(track.height, track.width * CGFloat(max(0, min(1, r.fraction))))
-                Self.barColor(r.level).setFill()
+                Self.barColor(r.level, risk: r.risk).setFill()
                 NSBezierPath(roundedRect: fill, xRadius: 4, yRadius: 4).fill()
             }
             text(r.value, NSRect(x: w - pad - Self.valueW, y: y, width: Self.valueW, height: 16), size: 12, weight: .semibold,
-                 color: r.level > 0 ? c : .labelColor, align: .right, digits: true)
+                 color: Self.valueColor(r.level), align: .right, digits: true)
 
             let sparkW: CGFloat = r.spark.count > 1 ? 70 : 0
             let detailRect = NSRect(x: barX, y: y + 16, width: w - pad - barX - sparkW - (sparkW > 0 ? 8 : 0), height: 15)
