@@ -27,9 +27,11 @@ final class ResourceWatch: NSObject {
     private(set) var active: [Resource.Alert] = []
     /// 지금 열려 있는 메뉴의 맥 상태 카드 (새로 읽을 때마다 다시 그린다)
     weak var card: ResourceCard?
-    /// 메뉴바 고양이 손 색 단계 (0 평소 · 1 주황 · 2 빨강). 바뀔 때만 onIconLevel 을 부른다
+    /// 메뉴바 고양이 손 색 단계 (0 평소 · 1 주황 · 2 빨강)
     private(set) var iconLevel = 0
-    var onIconLevel: ((Int) -> Void)?
+    /// 메뉴바 손에 그릴 것 (바쁨 단계·배터리 양·충전 여부) 이 바뀔 때만 부른다
+    var onIconChange: (() -> Void)?
+    private var iconKey = ""
 
     static let interval: TimeInterval = 10
     static let fastInterval: TimeInterval = 2
@@ -107,8 +109,9 @@ final class ResourceWatch: NSObject {
         cleaner.observe(s, canAsk: alertsOn)
         dashboard.refresh()
         card?.update()
-        let level = Resource.iconLevel(history, now: s.at)
-        if level != iconLevel { iconLevel = level; onIconLevel?(level) }
+        iconLevel = Resource.iconLevel(history, now: s.at)
+        let key = "\(iconLevel)|" + (s.battery.map { "\($0.percent)|\($0.charging)|\($0.onBattery)" } ?? "-")
+        if key != iconKey { iconKey = key; onIconChange?() }
         guard alertsOn else { return }
         if s.at.timeIntervalSince(lastCalmNotice) < Self.calmGap { due = due.filter(\.urgent) }
         guard let a = due.first else { return }
@@ -306,7 +309,7 @@ private final class Sampler {
                                pressure: [1: 0, 2: 1, 4: 2][sysctlInt("kern.memorystatus_vm_pressure_level") ?? 1] ?? 0,
                                swapBytes: swapUsed(), thermal: ProcessInfo.processInfo.thermalState.rawValue,
                                battery: bat, watts: bat?.onBattery == true ? batteryWatts() : nil, gpu: discreteGPU(),
-                               everyApp: apps, own: own, disk: disk)
+                               everyApp: apps, own: own, disk: disk, power: bat == nil ? nil : powerInfo())
     }
 
     /// 시동 디스크 전체·사용 가능 용량 (Finder 의 '사용 가능'과 같은 값)
@@ -506,6 +509,24 @@ private final class Sampler {
                                     lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled)
         }
         return nil
+    }
+
+    /// 맥 전체 전력·충전 전력·충전기 최대 W (AppleSmartBattery). 10초에 한 번 레지스트리 값 몇 개를 읽는 정도라 가볍다
+    private func powerInfo() -> Resource.Power? {
+        let s = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceNameMatching("AppleSmartBattery"))
+        guard s != 0 else { return nil }
+        defer { IOObjectRelease(s) }
+        func prop(_ k: String) -> Any? { IORegistryEntryCreateCFProperty(s, k as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() }
+        let external = (prop("ExternalConnected") as? Bool) ?? false
+        let tele = prop("PowerTelemetryData") as? [String: Any]
+        let load = (tele?["SystemLoad"] as? NSNumber)?.doubleValue ?? 0          // mW
+        var charge: Double?
+        if external, let a = prop("InstantAmperage") as? NSNumber, let v = prop("Voltage") as? NSNumber {
+            // 들어가는 쪽이 + (충전), 나가는 쪽이 -
+            charge = max(0, Double(Int32(truncatingIfNeeded: a.int64Value))) * v.doubleValue / 1e6
+        }
+        let adapter = external ? ((prop("AdapterDetails") as? [String: Any])?["Watts"] as? NSNumber)?.intValue : nil
+        return Resource.Power(systemW: load > 0 ? load / 1000 : nil, chargeW: charge, adapterW: adapter.flatMap { $0 > 0 ? $0 : nil })
     }
 
     /// 배터리에서 지금 끌어 쓰는 전력 (mA × mV)

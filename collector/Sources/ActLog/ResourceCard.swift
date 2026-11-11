@@ -111,9 +111,8 @@ final class ResourceCard: NSView {
                        detail: memLine, spark: hist.map(\.memUsed), metric: AppSlices.memory(s)))
 
         if let p = AppSlices.power(s) {
-            let w = AppSlices.totalWatts(s)
-            out.append(Row(name: "전력", value: s.watts != nil ? Resource.watts(w) : "약 " + Resource.watts(w), fraction: w / p.whole, level: 0,
-                           detail: s.watts != nil ? "배터리에서 끄는 전력 · 앱별은 추정" : "앱들이 쓰는 전력 (추정) · 최근 10분",
+            let w = AppSlices.totalWatts(s), t = AppSlices.powerTexts(s)
+            out.append(Row(name: "전력", value: t.value, fraction: w / p.whole, level: 0, detail: t.detail,
                            spark: hist.map(AppSlices.totalWatts), sparkMax: p.whole, metric: p))
         }
         if let d = s.disk {

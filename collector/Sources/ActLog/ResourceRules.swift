@@ -17,6 +17,13 @@ enum Resource {
         var front: Bool               // 지금 앞에 있는 앱 (또는 그 앱이 띄운 프로세스)
     }
 
+    /// 전원·충전 (AppleSmartBattery 가 있는 맥만). 모르면 nil
+    struct Power: Equatable {
+        var systemW: Double?          // 맥 전체가 지금 쓰는 전력 (PowerTelemetryData SystemLoad)
+        var chargeW: Double?          // 배터리로 들어가는 충전 전력 (전원 연결 중일 때만, 안 들어가면 0)
+        var adapterW: Int?            // 꽂힌 충전기가 낼 수 있는 최대 전력
+    }
+
     struct Battery: Equatable {
         var percent: Int
         var onBattery: Bool
@@ -40,6 +47,7 @@ enum Resource {
         var everyApp: [String: App] = [:]   // apps 는 상위 몇 개뿐이라, 정리 판단은 이걸 본다
         var own: Own? = nil
         var disk: Disk? = nil               // 시동 디스크 (1분에 한 번 읽는다)
+        var power: Power? = nil
     }
 
     // MARK: 저장공간
@@ -275,6 +283,12 @@ enum Resource {
         let avg = recent.isEmpty ? last.cpu : recent.reduce(0) { $0 + $1.cpu } / Double(recent.count)
         let cpu = avg >= hotCPU ? 2 : (avg >= busyCPU ? 1 : 0)
         return max(cpu, min(max(last.pressure, 0), 2))
+    }
+
+    /// 배터리 위험도: 배터리로 쓰는 중에 20% 이하 = 1 (주황), 10% 이하 = 2 (빨강). 전원에 꽂혀 있으면 0
+    static func batteryLevel(_ b: Battery) -> Int {
+        guard b.onBattery else { return 0 }
+        return b.percent <= 10 ? 2 : (b.percent <= 20 ? 1 : 0)
     }
 
     // MARK: 앱별로 나눈 막대 (맥 상태 카드)

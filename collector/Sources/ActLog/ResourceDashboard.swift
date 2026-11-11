@@ -153,12 +153,12 @@ final class ResourceDashboard: NSObject {
         rows.memory.set(value: "\(Int(s.memUsed))%", fraction: s.memUsed / 100, level: s.pressure,
                         detail: "압박 \(Resource.pressureName[min(s.pressure, 2)]) · 스왑 \(Resource.bytes(s.swapBytes))",
                         spark: hist.map(\.memUsed), sparkMax: 100, focused: kind == .memory, metric: prepared[1])
-        // 전력: 배터리로 쓸 땐 배터리에서 끄는 전력, 전원에 꽂혀 있으면 앱들이 쓰는 전력 (추정)
+        // 전력: 배터리로 쓸 땐 배터리에서 끄는 전력, 전원에 꽂혀 있으면 맥이 재는 소모 / 충전 전력과 충전기 최대 W
         let watts = AppSlices.totalWatts(s)
         let power = hist.map(AppSlices.totalWatts)
         let focusKey = focus?.key ?? ""
-        rows.power.set(value: (s.watts != nil ? "" : "약 ") + Resource.watts(watts), fraction: watts / max(30, watts), level: 0,
-                       detail: s.watts != nil ? "배터리에서 끄는 전력 · 앱별은 추정" : "앱들이 쓰는 전력 (추정)",
+        let powerText = AppSlices.powerTexts(s)
+        rows.power.set(value: powerText.value, fraction: watts / max(30, watts), level: 0, detail: powerText.detail,
                        spark: power, sparkMax: max(30, power.max() ?? 0), focused: focusKey.hasPrefix("energy:"), metric: powerBar == nil ? nil : prepared[2])
         rows.disk.isHidden = s.disk == nil
         if let d = s.disk {

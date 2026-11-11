@@ -267,6 +267,9 @@ do {
     check("메모리 빠듯 = 주황, 심각 = 빨강", Resource.iconLevel([at(0, cpu: 10, pressure: 1)], now: base) == 1
           && Resource.iconLevel([at(0, cpu: 10, pressure: 2)], now: base) == 2)
     check("기록 없으면 0", Resource.iconLevel([], now: base) == 0)
+    func bat(_ p: Int, on: Bool) -> Resource.Battery { Resource.Battery(percent: p, onBattery: on, charging: !on, minutesLeft: nil, lowPower: false) }
+    check("배터리 위험도", Resource.batteryLevel(bat(50, on: true)) == 0 && Resource.batteryLevel(bat(20, on: true)) == 1
+          && Resource.batteryLevel(bat(10, on: true)) == 2 && Resource.batteryLevel(bat(5, on: false)) == 0)
 
     // 앱별로 나눈 막대
     let items: [(key: String, name: String, value: Double)] = [("a", "A", 300), ("b", "B", 100), ("c", "C", 5), ("d", "D", 0)]

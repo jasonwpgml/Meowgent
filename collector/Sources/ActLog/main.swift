@@ -45,6 +45,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var forward = InboxForward(dataDir: dataDir)
     lazy var reactions = Reactions(dataDir: dataDir)
     var statusItem: NSStatusItem!
+    /// 메뉴 막대가 밝아지거나 어두워지면 손을 다시 그린다 (배터리 손은 템플릿이 아니라 색을 직접 정함)
+    private var menuBarAppearance: NSKeyValueObservation?
     var resumeTimer: Timer?
     var permissionTimer: Timer?
     var axStarted = false
@@ -297,7 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         resources.cleaner.unsuggest = { [weak self] k in self?.suggestions.resolve(key: k) }
         suggestions.start()
         resources.dataDir = dataDir
-        resources.onIconLevel = { [weak self] _ in self?.updateStatusIcon() }
+        resources.onIconChange = { [weak self] in self?.updateStatusIcon() }
         resources.start()
         p.start()
         pet = p
@@ -325,30 +327,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
-        updateStatusIcon()
-    }
-
-    /// 메뉴바 고양이 손 (실제 사진에서 딴 그림, assets/menubar-paw). 번들 밖에서 돌릴 때는 시스템 발바닥으로 대신한다.
-    static let menuBarPaw: NSImage? = {
-        let img = Bundle.main.image(forResource: "MenuBarPaw") ?? NSImage(systemSymbolName: "pawprint.fill", accessibilityDescription: nil)
-        img?.isTemplate = true
-        return img
-    }()
-
-    /// 바쁠 때 쓰는 색칠한 손. 메뉴 막대는 템플릿 그림에 준 contentTintColor 를 무시하고 어둡게 그려서
-    /// (2026-11-11 화면으로 확인) 템플릿이 아닌 그림에 직접 색을 칠한다
-    static let orangePaw = tinted(menuBarPaw, .systemOrange)
-    static let redPaw = tinted(menuBarPaw, .systemRed)
-    private static func tinted(_ img: NSImage?, _ color: NSColor) -> NSImage? {
-        guard let img else { return nil }
-        let out = NSImage(size: img.size, flipped: false) { r in
-            img.draw(in: r)
-            color.set()
-            r.fill(using: .sourceAtop)
-            return true
+        menuBarAppearance = statusItem.button?.observe(\.effectiveAppearance) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.updateStatusIcon() }
         }
-        out.isTemplate = false
-        return out
+        updateStatusIcon()
     }
 
     func updateStatusIcon() {
@@ -356,16 +338,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let ok = axStarted && tap.isEnabled
         let tip = s.paused ? (recordingEnabled ? "Meowgent: 일시정지" : "Meowgent: 고양이만 (기록 꺼짐)") : (ok ? "Meowgent: 기록 중" : "Meowgent: 권한 필요")
         // 고양이 손: 기록 중 = 또렷하게, 일시정지 = 흐리게, 권한 필요 = 옆에 "!"
-        // 색: 평소엔 메뉴 막대 기본색(흰색·검은색), 맥이 바쁘면 주황, 많이 바쁘면 빨강 (CPU 30초 평균·메모리 압박)
+        // 손 = 배터리: 회색 손이 배터리만큼 차고, 전원이 연결돼 있으면 번개, 맨 아래에 숫자 (MenuBarIcon)
+        // 채운 색: 평소엔 메뉴 막대 기본색(흰색·검은색), 맥이 바쁘면 주황, 많이 바쁘면 빨강 (CPU 30초 평균·메모리 압박)
         guard let button = statusItem?.button else { return }
         let level = resources.iconLevel
+        let battery = resources.latest?.battery
         let busy = level >= 2 ? " · 맥이 많이 바쁘다냥" : (level == 1 ? " · 맥이 바쁘다냥" : "")
-        button.image = level >= 2 ? Self.redPaw : (level == 1 ? Self.orangePaw : Self.menuBarPaw)
-        button.image?.accessibilityDescription = tip + busy
+        let power = battery.map { " · 배터리 \($0.percent)%" + ($0.charging ? " 충전 중" : ($0.onBattery ? "" : " 전원 연결")) } ?? ""
+        let dark = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        button.image = MenuBarIcon.image(percent: battery?.percent, plugged: battery.map { !$0.onBattery } ?? false,
+                                         fill: level >= 2 ? .systemRed : (level == 1 ? .systemOrange : nil), dark: dark)
+        button.image?.accessibilityDescription = tip + busy + power
         button.imagePosition = .imageLeading
         button.appearsDisabled = s.paused
         button.title = (!s.paused && !ok) ? "!" : ""
-        button.toolTip = tip + busy
+        button.toolTip = tip + busy + power
     }
 
     /// 메뉴 막대 메뉴: 맥 상태 카드 → 기록 상태 → 자주 쓰는 것 → 설정 묶음 → 앱

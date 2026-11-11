@@ -33,8 +33,22 @@ enum AppSlices {
     }
 
     static func appWatts(_ s: Resource.Sample) -> Double { s.everyApp.values.reduce(0) { $0 + $1.watts } }
-    /// 배터리로 쓸 땐 배터리에서 끄는 전력, 전원에 꽂혀 있으면 앱들이 쓰는 전력 (추정)
-    static func totalWatts(_ s: Resource.Sample) -> Double { s.watts ?? appWatts(s) }
+    /// 맥 전체가 쓰는 전력: 배터리로 쓸 땐 배터리에서 끄는 전력, 전원에 꽂혀 있으면 맥이 재는 시스템 전력,
+    /// 둘 다 모르면 (배터리 없는 맥) 앱들이 쓰는 전력 추정
+    static func totalWatts(_ s: Resource.Sample) -> Double { s.watts ?? s.power?.systemW ?? appWatts(s) }
+    /// 맥이 직접 잰 값인지 (아니면 앱별 추정의 합)
+    static func measured(_ s: Resource.Sample) -> Bool { s.watts != nil || s.power?.systemW != nil }
+
+    /// 전력 줄 오른쪽 숫자와 설명. 전원 연결 중이면 "소모 / 충전" 과 충전기 최대 W
+    static func powerTexts(_ s: Resource.Sample) -> (value: String, detail: String) {
+        if let w = s.watts { return (Resource.watts(w), "배터리에서 끄는 전력 · 앱별은 추정") }
+        if let p = s.power, let sys = p.systemW {
+            let charge = p.chargeW ?? 0
+            let detail = "소모 / 충전" + (p.adapterW.map { " · 충전기 최대 \($0)W" } ?? "")
+            return ("\(Resource.watts(sys)) / \(charge < 0.05 ? "0W" : Resource.watts(charge))", detail)
+        }
+        return ("약 " + Resource.watts(appWatts(s)), "앱들이 쓰는 전력 (추정)")
+    }
 
     /// 전력: 앱별 값은 macOS 추정치. 막대 끝은 30W (넘으면 그만큼 늘린다).
     /// 배터리로 쓸 때는 실제로 끄는 전력을 채우고, 앱에 안 잡히는 몫(화면 등)은 회색으로 남긴다
@@ -43,7 +57,7 @@ enum AppSlices {
         guard filled > 0 else { return nil }
         let whole = max(30, filled)
         return Metric(kind: .power, slices: Resource.slices(items(s, \.watts), whole: whole, filled: filled),
-                      whole: whole, restName: s.watts != nil ? "화면·시스템·그 밖의 앱" : "그 밖의 앱")
+                      whole: whole, restName: measured(s) ? "화면·시스템·그 밖의 앱" : "그 밖의 앱")
     }
 
     // MARK: 색
