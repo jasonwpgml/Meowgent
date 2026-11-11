@@ -254,6 +254,26 @@ do {
     check("무시한 앱은 말 안 함", keys(sample([app("Docker", cpu: 200)]), ignored: ["/Applications/Docker.app"]).isEmpty)
     check("여럿이 나눠 꽉 채움", keys(sample([app("A", cpu: 60), app("B", cpu: 50)], cpu: 90)) == ["cpu:total"])
     check("메모리 빠듯·심각", keys(sample([], pressure: 1)) == ["memory:tight"] && keys(sample([], pressure: 2)) == ["memory:critical"])
+
+    // 앱별로 나눈 막대
+    let items: [(key: String, name: String, value: Double)] = [("a", "A", 300), ("b", "B", 100), ("c", "C", 5), ("d", "D", 0)]
+    let sl = Resource.slices(items, whole: 1000, filled: 500, top: 5)
+    check("큰 앱만 따로, 작은 앱·나머지는 한 조각", sl.map(\.key) == ["a", "b", ""] && abs(sl[0].fraction - 0.3) < 1e-9
+          && abs(sl[2].fraction - 0.1) < 1e-9, "\(sl)")
+    let over = Resource.slices(items, whole: 1000, filled: 200)
+    check("앱 합이 찬 양보다 크면 줄여 맞춤", over.map(\.key) == ["a", "b"] && abs(over.reduce(0) { $0 + $1.fraction } - 0.2) < 1e-9
+          && over[0].value == 300, "\(over)")
+    let sumOnly = Resource.slices(items, whole: 1000)
+    check("찬 양을 모르면 앱 합", sumOnly.map(\.key) == ["a", "b", ""] && abs(sumOnly.reduce(0) { $0 + $1.fraction } - 0.405) < 1e-9, "\(sumOnly)")
+    check("막대 끝을 넘지 않음", Resource.slices([("a", "A", 900), ("b", "B", 900)], whole: 1000).reduce(0) { $0 + $1.fraction } <= 1 + 1e-9)
+    check("상위 몇 개만", Resource.slices([("a", "A", 50), ("b", "B", 40), ("c", "C", 30)], whole: 100, top: 2).map(\.key) == ["a", "b", ""])
+    var colors = Resource.assignColors(["a", "b", "c"], current: [:], palette: 8)
+    check("보이는 앱끼리 색이 안 겹침", Set(["a", "b", "c"].compactMap { colors[$0] }).count == 3, "\(colors)")
+    let keep = colors
+    colors = Resource.assignColors(["c", "x", "a"], current: colors, palette: 8)
+    check("받은 색은 그대로", colors["a"] == keep["a"] && colors["c"] == keep["c"] && colors["x"] != colors["a"] && colors["x"] != colors["c"])
+    check("같은 색끼리 부딪히면 나중 앱이 옮김", Resource.assignColors(["p", "q"], current: ["p": 1, "q": 1], palette: 4)["q"] != 1)
+    check("다시 켜도 같은 첫 색", Resource.assignColors(["Chrome"], current: [:], palette: 8) == Resource.assignColors(["Chrome"], current: [:], palette: 8))
     check("발열 serious 부터", keys(sample([], thermal: 1)).isEmpty && keys(sample([], thermal: 2)) == ["thermal:serious"])
     let onBat = Resource.Battery(percent: 60, onBattery: true, charging: false, minutesLeft: 45, lowPower: false)
     let k = keys(sample([app("Slack", watts: 3)], battery: onBat))

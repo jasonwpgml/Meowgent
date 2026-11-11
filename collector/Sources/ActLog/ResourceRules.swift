@@ -262,6 +262,57 @@ enum Resource {
         }
     }
 
+    // MARK: 앱별로 나눈 막대 (맥 상태 카드)
+
+    /// 막대 한 조각. key 가 빈 조각은 '나머지'(그 밖의 앱·시스템)
+    struct Slice: Equatable {
+        var key: String
+        var name: String
+        var value: Double             // 원래 단위 (CPU: 코어 하나 = 100, 메모리: 바이트, 전력: W)
+        var fraction: Double          // 막대 전체 폭에 대한 비율
+    }
+
+    /// whole: 막대 끝(100%)에 해당하는 값. filled: 실제로 찬 양 (모르면 앱들의 합).
+    /// 큰 앱 top 개만 따로 칠하고 나머지는 한 조각으로 묶는다. 막대 폭의 1% 도 안 되는 앱은 나머지로 간다.
+    /// 앱들의 합이 filled 보다 크면 (메모리: 압축분이 앱 쪽에 잡히는 등) filled 에 맞춰 줄인다.
+    static func slices(_ items: [(key: String, name: String, value: Double)], whole: Double, filled: Double? = nil, top: Int = 5) -> [Slice] {
+        guard whole > 0 else { return [] }
+        let sorted = items.filter { $0.value > 0 }.sorted { $0.value > $1.value }
+        let big = sorted.prefix(top).filter { $0.value / whole >= 0.01 }
+        let sumBig = big.reduce(0) { $0 + $1.value }
+        let fill = min(whole, max(0, filled ?? sorted.reduce(0) { $0 + $1.value }))
+        let scale = sumBig > fill && sumBig > 0 ? fill / sumBig : 1
+        var out = big.map { Slice(key: $0.key, name: $0.name, value: $0.value, fraction: $0.value * scale / whole) }
+        let rest = fill - sumBig * scale
+        if rest / whole >= 0.005 { out.append(Slice(key: "", name: "", value: rest, fraction: rest / whole)) }
+        return out
+    }
+
+    /// 앱마다 색 번호를 정한다. 한 번 받은 색은 계속 쓰고, 지금 보이는 앱끼리는 겹치지 않게 한다.
+    /// 처음 받는 앱은 이름에서 나온 번호부터 빈 색을 찾는다 (다시 켜도 같은 앱은 대개 같은 색).
+    static func assignColors(_ keys: [String], current: [String: Int], palette: Int) -> [String: Int] {
+        guard palette > 0 else { return current }
+        var out = current
+        var used = Set<Int>()
+        var fresh: [String] = []
+        for k in keys where !k.isEmpty {
+            if let c = current[k], c < palette, !used.contains(c) { used.insert(c) } else if !fresh.contains(k) { fresh.append(k) }
+        }
+        for k in fresh {
+            let start = Int(stableHash(k) % UInt64(palette))
+            let free = (0..<palette).map { (start + $0) % palette }.first { !used.contains($0) }
+            let c = free ?? start
+            out[k] = c
+            used.insert(c)
+        }
+        return out
+    }
+
+    /// 실행마다 바뀌지 않는 해시 (FNV-1a). Swift 의 hashValue 는 실행마다 달라서 쓰지 않는다
+    static func stableHash(_ s: String) -> UInt64 {
+        s.utf8.reduce(UInt64(14_695_981_039_346_656_037)) { ($0 ^ UInt64($1)) &* 1_099_511_628_211 }
+    }
+
     // MARK: 글자
 
     static let thermalName = ["보통", "조금 따뜻", "뜨거움", "매우 뜨거움"]

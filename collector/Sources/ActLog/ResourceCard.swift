@@ -1,12 +1,17 @@
 import AppKit
 
 /// 메뉴 맨 위에 붙는 맥 상태 카드 (메뉴바 메뉴·고양이 우클릭 메뉴 둘 다).
-/// CPU·메모리·저장공간·배터리(·GPU)를 막대로, 이어지는 문제와 많이 쓰는 앱을 한 줄씩. 누르면 대시보드를 연다.
+/// CPU·메모리·전력·저장공간·배터리(·GPU)를 막대로, 이어지는 문제와 앱 색 범례를 한 줄씩. 누르면 대시보드를 연다.
+/// CPU·메모리·전력 막대는 앱별 색 조각으로 나눠 그리고, 조각에 마우스를 올리면 그 줄 설명 자리에 앱 이름과 양이 뜬다.
+/// (메뉴 안이라 macOS 툴팁은 늦게 뜨거나 안 떠서 직접 그린다.)
 /// 메뉴가 열려 있는 동안 2초마다 새로 읽는다. 색은 시스템 색이라 밝은·어두운 메뉴 모두 맞는다.
 final class ResourceCard: NSView {
     private unowned let watch: ResourceWatch
     private var timer: Timer?
     private var hovered = false
+    /// 마우스가 올라간 조각 (줄 번호, 조각 번호)과, 그리면서 모아 둔 조각 위치
+    private var hoverSlice: (row: Int, index: Int)?
+    private var hits: [(rect: NSRect, row: Int, index: Int)] = []
     /// 높이는 메뉴를 열 때 정한다 (열린 메뉴의 항목 높이는 바뀌지 않으므로). 그 사이 생긴 문제 줄은 다음에 열 때 보인다
     private var alertSlots = 0
 
@@ -26,6 +31,9 @@ final class ResourceCard: NSView {
         let detail: String
         var spark: [Double] = []
         var sparkMax: Double = 100
+        /// 앱별 조각 (없으면 fraction 만큼 한 색으로 채운다)
+        var metric: AppSlices.Metric?
+        var slices: [Resource.Slice] { metric?.slices ?? [] }
     }
 
     init(watch: ResourceWatch) {
@@ -68,10 +76,17 @@ final class ResourceCard: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self))
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways], owner: self))
     }
     override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
-    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; hoverSlice = nil; needsDisplay = true }
+    override func mouseMoved(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        let hit = hits.first { $0.rect.contains(p) }.map { (row: $0.row, index: $0.index) }
+        guard hit?.row != hoverSlice?.row || hit?.index != hoverSlice?.index else { return }
+        hoverSlice = hit
+        needsDisplay = true
+    }
 
     override func mouseUp(with event: NSEvent) {
         enclosingMenuItem?.menu?.cancelTracking()
@@ -84,13 +99,21 @@ final class ResourceCard: NSView {
         let hist = watch.history
         var out: [Row] = []
         out.append(Row(name: "CPU", value: "\(Int(s.cpu))%", fraction: s.cpu / 100, level: s.cpu >= Resource.busyCPU ? 1 : 0,
-                       detail: "코어 \(s.cores)개 · 최근 10분", spark: hist.map(\.cpu)))
+                       detail: "코어 \(s.cores)개 · 최근 10분", spark: hist.map(\.cpu), metric: AppSlices.cpu(s)))
+
         let total = ProcessInfo.processInfo.physicalMemory
         let used = UInt64(Double(total) * s.memUsed / 100)
-        var mem = "\(Resource.bytes(used)) / \(Resource.bytes(total)) · 압박 \(Resource.pressureName[min(s.pressure, 2)])"
-        if s.swapBytes >= 1_073_741_824 { mem += " · 스왑 \(Resource.bytes(s.swapBytes))" }
+        var memLine = "\(Resource.bytes(used)) / \(Resource.bytes(total)) · 압박 \(Resource.pressureName[min(s.pressure, 2)])"
+        if s.swapBytes >= 1_073_741_824 { memLine += " · 스왑 \(Resource.bytes(s.swapBytes))" }
         out.append(Row(name: "메모리", value: "\(Int(s.memUsed))%", fraction: s.memUsed / 100, level: min(s.pressure, 2),
-                       detail: mem, spark: hist.map(\.memUsed)))
+                       detail: memLine, spark: hist.map(\.memUsed), metric: AppSlices.memory(s)))
+
+        if let p = AppSlices.power(s) {
+            let w = AppSlices.totalWatts(s)
+            out.append(Row(name: "전력", value: s.watts != nil ? Resource.watts(w) : "약 " + Resource.watts(w), fraction: w / p.whole, level: 0,
+                           detail: s.watts != nil ? "배터리에서 끄는 전력 · 앱별은 추정" : "앱들이 쓰는 전력 (추정) · 최근 10분",
+                           spark: hist.map(AppSlices.totalWatts), sparkMax: p.whole, metric: p))
+        }
         if let d = s.disk {
             out.append(Row(name: "저장공간", value: "\(Resource.diskSize(d.free)) 남음", fraction: d.usedFraction, level: Resource.diskLevel(d),
                            detail: "전체 \(Resource.diskSize(d.total)) 중 \(Resource.diskSize(d.used)) 사용 (\(Int((d.usedFraction * 100).rounded()))%)"))
@@ -141,24 +164,46 @@ final class ResourceCard: NSView {
         hint.draw(at: NSPoint(x: w - pad - hs.width, y: 8))
 
         // 막대 줄
+        let all = rows(s)
+        var legend: [Resource.Slice] = []
+        for sl in all.flatMap(\.slices) where !sl.key.isEmpty && !legend.contains(where: { $0.key == sl.key }) { legend.append(sl) }
+        AppSlices.assignColors(all.compactMap(\.metric))
+        hits = []
+        if let h = hoverSlice, h.row >= all.count || h.index >= all[h.row].slices.count { hoverSlice = nil }
+
         var y = Self.headerH
         let barX = pad + Self.nameW, barW = w - pad - Self.valueW - barX - 8
-        for r in rows(s) {
+        for (ri, r) in all.enumerated() {
             let c = Self.color(r.level)
             text(r.name, NSRect(x: pad, y: y, width: Self.nameW, height: 16), size: 12, weight: .medium)
             let track = NSRect(x: barX, y: y + 5, width: barW, height: 7)
             NSColor.quaternaryLabelColor.setFill()
             NSBezierPath(roundedRect: track, xRadius: 3.5, yRadius: 3.5).fill()
-            var fill = track
-            fill.size.width = max(track.height, track.width * CGFloat(max(0, min(1, r.fraction))))
-            c.setFill()
-            NSBezierPath(roundedRect: fill, xRadius: 3.5, yRadius: 3.5).fill()
+            if r.slices.isEmpty {
+                var fill = track
+                fill.size.width = max(track.height, track.width * CGFloat(max(0, min(1, r.fraction))))
+                c.setFill()
+                NSBezierPath(roundedRect: fill, xRadius: 3.5, yRadius: 3.5).fill()
+            } else if let m = r.metric {
+                let spans = AppSlices.draw(m, in: track, hover: hoverSlice?.row == ri ? hoverSlice?.index : nil, rest: .tertiaryLabelColor)
+                // 마우스로 맞히기 쉽게 막대 위아래로 넉넉히
+                for (i, sp) in spans.enumerated() { hits.append((NSRect(x: sp.lowerBound, y: y, width: sp.upperBound - sp.lowerBound, height: 17), ri, i)) }
+            }
             text(r.value, NSRect(x: w - pad - Self.valueW, y: y, width: Self.valueW, height: 16), size: 12, weight: .semibold,
                  color: r.level > 0 ? c : .labelColor, align: .right, digits: true)
 
             let sparkW: CGFloat = r.spark.count > 1 ? 70 : 0
-            text(r.detail, NSRect(x: barX, y: y + 16, width: w - pad - barX - sparkW - (sparkW > 0 ? 8 : 0), height: 15),
-                 size: 10.5, color: .secondaryLabelColor, digits: true)
+            let detailRect = NSRect(x: barX, y: y + 16, width: w - pad - barX - sparkW - (sparkW > 0 ? 8 : 0), height: 15)
+            if let h = hoverSlice, h.row == ri, let m = r.metric {
+                // 마우스가 올라간 조각: 설명 자리에 앱 이름과 양
+                let sl = r.slices[h.index]
+                sliceColor(sl).setFill()
+                NSBezierPath(ovalIn: NSRect(x: detailRect.minX, y: detailRect.minY + 4, width: 7, height: 7)).fill()
+                text(AppSlices.label(m, sl), NSRect(x: detailRect.minX + 11, y: detailRect.minY, width: detailRect.width - 11, height: detailRect.height), size: 10.5, weight: .medium,
+                     color: .labelColor, digits: true)
+            } else {
+                text(r.detail, detailRect, size: 10.5, color: .secondaryLabelColor, digits: true)
+            }
             if sparkW > 0 { drawSpark(r.spark, max: r.sparkMax, in: NSRect(x: w - pad - sparkW, y: y + 17, width: sparkW, height: 12), color: c) }
             y += Self.rowH
         }
@@ -170,12 +215,24 @@ final class ResourceCard: NSView {
             y += Self.lineH
         }
 
-        // 많이 쓰는 앱
-        let top = s.apps.sorted { $0.cpu > $1.cpu }.filter { $0.cpu >= 1 }.prefix(3)
-        let apps = top.isEmpty ? "조용하다냥" : top.map { "\($0.name) \(Int($0.cpu.rounded()))%" }.joined(separator: " · ")
-        text("CPU 많이 쓰는 앱", NSRect(x: pad, y: y + 1, width: 100, height: 15), size: 10.5, color: .tertiaryLabelColor)
-        text(apps, NSRect(x: pad + 92, y: y, width: w - pad * 2 - 92, height: 16), size: 11, color: .secondaryLabelColor, digits: true)
+        // 색 범례: 막대에 나온 앱 (CPU 순 → 메모리 → 전력), 들어가는 만큼
+        guard !legend.isEmpty else {
+            text("조용하다냥", NSRect(x: pad, y: y, width: w - pad * 2, height: 16), size: 11, color: .secondaryLabelColor)
+            return
+        }
+        var x = pad
+        let font = NSFont.systemFont(ofSize: 11)
+        for sl in legend {
+            let nameW = ceil((sl.name as NSString).size(withAttributes: [.font: font]).width)
+            guard x + 11 + nameW <= w - pad else { break }
+            sliceColor(sl).setFill()
+            NSBezierPath(ovalIn: NSRect(x: x, y: y + 5, width: 7, height: 7)).fill()
+            text(sl.name, NSRect(x: x + 11, y: y, width: nameW + 2, height: 16), size: 11, color: .secondaryLabelColor)
+            x += 11 + nameW + 12
+        }
     }
+
+    private func sliceColor(_ sl: Resource.Slice) -> NSColor { AppSlices.color(sl, rest: .tertiaryLabelColor) }
 
     private func drawSpark(_ v: [Double], max m: Double, in r: NSRect, color: NSColor) {
         guard v.count > 1, m > 0 else { return }

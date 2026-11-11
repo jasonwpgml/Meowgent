@@ -8,7 +8,8 @@ struct NoticeDetail {
     let hide: () -> Void
 }
 
-/// 맥 상태 대시보드: 알림이 왜 떴는지 + CPU·메모리·저장공간·발열·에너지(·GPU) 막대와 최근 10분 선 + 많이 쓰는 앱.
+/// 맥 상태 대시보드: 알림이 왜 떴는지 + CPU·메모리·전력·저장공간·발열·배터리(·GPU) 막대와 최근 10분 선 + 많이 쓰는 앱.
+/// CPU·메모리·전력 막대는 메뉴 카드처럼 앱별 색 조각이고, 조각에 마우스를 올리면 그 줄 설명 자리에 앱 이름과 양이 뜬다.
 /// 미리보기는 마우스가 말풍선이나 이 창 위에 있는 동안만 떠 있고, 누르면 고정된다. 고정은 ×·Esc·바깥 클릭으로 닫는다.
 final class ResourceDashboard: NSObject {
     private unowned let watch: ResourceWatch
@@ -24,7 +25,7 @@ final class ResourceDashboard: NSObject {
     private let focusLabel = NSTextField(wrappingLabelWithString: "")
     private let ignoreButton = NSButton(title: "", target: nil, action: nil)
     private let rows = (cpu: MetricRow("CPU"), memory: MetricRow("메모리"), disk: MetricRow("저장공간"), thermal: MetricRow("발열"),
-                        energy: MetricRow("에너지"), gpu: MetricRow("GPU"))
+                        power: MetricRow("전력"), battery: MetricRow("배터리"), gpu: MetricRow("GPU"))
     private let appsTitle = NSTextField(labelWithString: "")
     private var appRows: [AppRow] = []
     private let footer = NSTextField(labelWithString: "")
@@ -144,11 +145,20 @@ final class ResourceDashboard: NSObject {
         let hist = watch.history
         let kind = focus?.kind
 
+        let cpuBar = AppSlices.cpu(s), memBar = AppSlices.memory(s), powerBar = AppSlices.power(s)
+        AppSlices.assignColors([cpuBar, memBar] + (powerBar.map { [$0] } ?? []))
         rows.cpu.set(value: "\(Int(s.cpu))%", fraction: s.cpu / 100, level: s.cpu >= Resource.busyCPU ? 1 : 0,
-                     detail: "코어 \(s.cores)개", spark: hist.map(\.cpu), sparkMax: 100, focused: kind == .cpu)
+                     detail: "코어 \(s.cores)개", spark: hist.map(\.cpu), sparkMax: 100, focused: kind == .cpu, metric: cpuBar)
         rows.memory.set(value: "\(Int(s.memUsed))%", fraction: s.memUsed / 100, level: s.pressure,
                         detail: "압박 \(Resource.pressureName[min(s.pressure, 2)]) · 스왑 \(Resource.bytes(s.swapBytes))",
-                        spark: hist.map(\.memUsed), sparkMax: 100, focused: kind == .memory)
+                        spark: hist.map(\.memUsed), sparkMax: 100, focused: kind == .memory, metric: memBar)
+        // 전력: 배터리로 쓸 땐 배터리에서 끄는 전력, 전원에 꽂혀 있으면 앱들이 쓰는 전력 (추정)
+        let watts = AppSlices.totalWatts(s)
+        let power = hist.map(AppSlices.totalWatts)
+        let focusKey = focus?.key ?? ""
+        rows.power.set(value: (s.watts != nil ? "" : "약 ") + Resource.watts(watts), fraction: watts / max(30, watts), level: 0,
+                       detail: s.watts != nil ? "배터리에서 끄는 전력 · 앱별은 추정" : "앱들이 쓰는 전력 (추정)",
+                       spark: power, sparkMax: max(30, power.max() ?? 0), focused: focusKey.hasPrefix("energy:"), metric: powerBar)
         rows.disk.isHidden = s.disk == nil
         if let d = s.disk {
             rows.disk.set(value: "\(Resource.diskSize(d.free)) 남음", fraction: d.usedFraction, level: Resource.diskLevel(d),
@@ -158,17 +168,12 @@ final class ResourceDashboard: NSObject {
         rows.thermal.set(value: Resource.thermalName[th], fraction: Double(th + 1) / 4, level: th >= 3 ? 2 : (th == 2 ? 1 : 0),
                          detail: th >= 2 ? "macOS가 속도를 낮추는 중" : "괜찮다냥", spark: hist.map { Double($0.thermal) }, sparkMax: 3,
                          focused: kind == .thermal)
-        // 선: 배터리로 쓸 땐 배터리에서 나가는 전력, 전원에 꽂혀 있으면 앱들이 쓰는 전력
-        let appWatts = { (x: Resource.Sample) in x.apps.reduce(0) { $0 + $1.watts } }
-        let power = hist.map { $0.watts ?? appWatts($0) }
+        rows.battery.isHidden = s.battery == nil
         if let b = s.battery {
             let low = b.onBattery && b.percent <= 20
-            rows.energy.set(value: "\(b.percent)%", fraction: Double(b.percent) / 100, level: b.onBattery && b.percent <= 10 ? 2 : (low ? 1 : 0),
-                            detail: Self.batteryLine(b, watts: s.watts) + (b.onBattery ? "" : " · 앱 전력 \(Resource.watts(appWatts(s)))"),
-                            spark: power, sparkMax: max(20, power.max() ?? 0), focused: kind == .energy)
-        } else {
-            rows.energy.set(value: Resource.watts(appWatts(s)), fraction: min(appWatts(s) / 30, 1), level: 0, detail: "앱들이 쓰는 전력",
-                            spark: power, sparkMax: max(30, power.max() ?? 0), focused: kind == .energy)
+            rows.battery.set(value: "\(b.percent)%", fraction: Double(b.percent) / 100, level: b.onBattery && b.percent <= 10 ? 2 : (low ? 1 : 0),
+                             detail: Self.batteryLine(b, watts: s.watts), spark: hist.compactMap { $0.battery.map { Double($0.percent) } },
+                             sparkMax: 100, focused: focusKey.hasPrefix("battery:"))
         }
         rows.gpu.isHidden = s.gpu == nil
         if let g = s.gpu {
@@ -339,7 +344,7 @@ final class ResourceDashboard: NSObject {
         let ownHead = NSStackView(views: [ownTitle, NSView(), ownCount])
         let ownRows: [NSView] = [own.cpu, own.memory, own.diskNow, own.diskTotal, own.netNow, own.netTotal, own.data] + ownParts
 
-        let views: [NSView] = [header, focusBox, ignoreButton, buildCleanBox(), rows.cpu, rows.memory, rows.disk, rows.thermal, rows.energy, rows.gpu,
+        let views: [NSView] = [header, focusBox, ignoreButton, buildCleanBox(), rows.cpu, rows.memory, rows.power, rows.disk, rows.thermal, rows.battery, rows.gpu,
                                Self.separator(), appsTitle, colHead] + appRows + [Self.separator(), ownHead] + ownRows + [footer]
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
@@ -470,26 +475,80 @@ private final class MetricRow: NSStackView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func set(value v: String, fraction: Double, level: Int, detail d: String, spark s: [Double], sparkMax: Double, focused: Bool) {
+    private var plainDetail = ""
+
+    func set(value v: String, fraction: Double, level: Int, detail d: String, spark s: [Double], sparkMax: Double, focused: Bool,
+             metric: AppSlices.Metric? = nil) {
         let c = ResourceDashboard.color(level)
         value.stringValue = v
         value.textColor = level > 0 ? c : ResourceDashboard.cream
         name.textColor = focused ? ResourceDashboard.amber : ResourceDashboard.cream
-        detail.stringValue = d
+        plainDetail = d
         bar.fraction = max(0, min(1, fraction)); bar.color = c
+        bar.onHover = { [weak self] in self?.showDetail() }
+        bar.metric = metric
+        showDetail()
         spark.values = s; spark.maxValue = sparkMax; spark.color = c
+    }
+
+    /// 조각에 마우스가 있으면 그 앱 이름과 양, 아니면 원래 설명
+    private func showDetail() {
+        if let m = bar.metric, let i = bar.hover, i < m.slices.count {
+            detail.attributedStringValue = AppSlices.attributed(m, m.slices[i], rest: Bar.rest, text: ResourceDashboard.cream, size: 11)
+        } else {
+            detail.stringValue = plainDetail
+        }
     }
 }
 
+/// 한 색 막대, 또는 metric 이 있으면 앱별 색 조각 막대
 private final class Bar: NSView {
+    static let rest = ResourceDashboard.cream.withAlphaComponent(0.35)
     var fraction: Double = 0 { didSet { if fraction != oldValue { needsDisplay = true } } }
     var color: NSColor = ResourceDashboard.calm { didSet { needsDisplay = true } }
+    /// 새로 읽을 때마다 바뀐다. 마우스가 그대로 있어도 그 자리의 조각을 다시 찾는다
+    var metric: AppSlices.Metric? { didSet { updateHover(); needsDisplay = true } }
+    private(set) var hover: Int?
+    var onHover: (() -> Void)?
+    private var mouseX: CGFloat?
+
     override func draw(_ dirtyRect: NSRect) {
         let r = bounds.height / 2
         ResourceDashboard.cream.withAlphaComponent(0.12).setFill()
         NSBezierPath(roundedRect: bounds, xRadius: r, yRadius: r).fill()
+        if let m = metric, !m.slices.isEmpty {
+            AppSlices.draw(m, in: bounds, hover: hover, rest: Self.rest)
+            return
+        }
         color.setFill()
         NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: max(bounds.height, bounds.width * fraction), height: bounds.height), xRadius: r, yRadius: r).fill()
+    }
+
+    // 막대가 5pt 로 얇아서 마우스 맞히는 범위는 위아래로 넓힌다
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds.insetBy(dx: 0, dy: -6), options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways], owner: self))
+    }
+    override func mouseMoved(with event: NSEvent) { mouseX = convert(event.locationInWindow, from: nil).x; updateHover() }
+    override func mouseEntered(with event: NSEvent) { mouseX = convert(event.locationInWindow, from: nil).x; updateHover() }
+    override func mouseExited(with event: NSEvent) { mouseX = nil; updateHover() }
+
+    private func updateHover() {
+        // AppSlices.draw 와 같은 식으로 조각 x 범위를 센다
+        var found: Int?
+        if let x = mouseX, let m = metric {
+            var left: CGFloat = 0
+            for (i, sl) in m.slices.enumerated() {
+                let w = bounds.width * CGFloat(sl.fraction)
+                if x >= left && x <= left + max(w, 2) { found = i; break }
+                left += w
+            }
+        }
+        guard found != hover else { return }
+        hover = found
+        needsDisplay = true
+        onHover?()
     }
 }
 
