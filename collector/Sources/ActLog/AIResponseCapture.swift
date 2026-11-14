@@ -72,14 +72,15 @@ final class AIResponseCapture {
             Log.write("AI 답변 추출 실패 (\(j.ai), 방법 \(j.method), 페이지 \(j.last.count)자)")
             return
         }
-        var text = answer
-        let (prompt, promptMasked) = Privacy.redact(AX.clip(j.prompt, 300))
+        // 가린 뒤에 자른다 (300자에 걸친 키·토큰의 앞부분이 남지 않게)
+        let (promptRedacted, promptMasked) = Privacy.redact(j.prompt, limit: 2000)
+        let prompt = AX.clip(promptRedacted, 300)
         var payload: [String: Any] = ["ai": j.ai, "prompt": prompt, "chars": answer.count,
                                       "wait_s": elapsed, "method": j.method]
         let limit = Privacy.config.maxAIResponseChars
-        if text.count > limit { text = String(text.prefix(limit)); payload["truncated"] = true }
+        if answer.count > limit { payload["truncated"] = true }
         if partial { payload["partial"] = true }
-        let (redacted, masked) = Privacy.redact(text)
+        let (redacted, masked) = Privacy.redact(answer, limit: limit)
         payload["text"] = redacted
         var e = Event("ai_response", payload: payload, privacy: (masked || promptMasked) ? "masked" : "none")
         e.app = j.appName; e.bundle = j.bundle; e.pid = j.pid; e.url = j.url; e.window = j.window

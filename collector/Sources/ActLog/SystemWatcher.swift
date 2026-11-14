@@ -101,7 +101,7 @@ final class SystemWatcher {
             store.write(e)
             return
         }
-        let (redacted, masked) = Privacy.redact(String(s.prefix(Privacy.config.maxClipboardChars)))
+        let (redacted, masked) = Privacy.redact(s, limit: Privacy.config.maxClipboardChars)
         e.payload = ["kind": "text", "text": redacted, "chars": s.count]
         if masked { e.privacy = "masked" }
         store.write(e)
@@ -131,7 +131,7 @@ final class SystemWatcher {
             store.write(e)
             return (0, false)
         }
-        let (redacted, masked) = Privacy.redact(String(s.prefix(Privacy.config.maxClipboardChars)))
+        let (redacted, masked) = Privacy.redact(s, limit: Privacy.config.maxClipboardChars)
         payload["kind"] = "text"
         payload["text"] = redacted
         payload["chars"] = s.count

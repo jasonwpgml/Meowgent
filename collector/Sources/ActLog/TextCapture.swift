@@ -200,12 +200,8 @@ final class TextCapture {
             store.write(e)
             return
         }
-        var text = trimmed
-        if text.count > Privacy.config.maxTextChars {
-            text = String(text.prefix(Privacy.config.maxTextChars))
-            payload["truncated"] = true
-        }
-        let (redacted, masked) = Privacy.redact(text)
+        if trimmed.count > Privacy.config.maxTextChars { payload["truncated"] = true }
+        let (redacted, masked) = Privacy.redact(trimmed, limit: Privacy.config.maxTextChars)
         payload["text"] = redacted
         payload["chars"] = trimmed.count
         let ai = Privacy.aiChat(url: e.url, bundle: e.bundle)

@@ -180,19 +180,29 @@ enum Privacy {
         return changed ? (c.string ?? url) : url
     }
 
+    // \b는 한글을 글자로 봐서 "…1234567입니다"처럼 조사가 붙으면 경계가 없다. 영문·숫자만 기준으로 앞뒤를 본다.
     private static let patterns: [(String, NSRegularExpression)] = [
-        ("private_key", #"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"#),
-        ("api_key", #"\bsk-[A-Za-z0-9_\-]{20,}"#),
-        ("github_token", #"\b(gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})"#),
-        ("aws_key", #"\bAKIA[0-9A-Z]{16}\b"#),
-        ("slack_token", #"\bxox[abprs]-[A-Za-z0-9\-]{10,}"#),
-        ("google_key", #"\bAIza[0-9A-Za-z_\-]{35}\b"#),
-        ("jwt", #"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"#),
-        ("rrn", #"\b\d{6}-?[1-4]\d{6}\b"#),
+        // END 줄이 없으면(잘렸거나 아직 덜 붙여넣음) 끝까지 가린다
+        ("private_key", #"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|[\s\S]*)"#),
+        ("api_key", #"(?<![0-9A-Za-z])sk-[A-Za-z0-9_\-]{20,}"#),
+        ("github_token", #"(?<![0-9A-Za-z])(gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})"#),
+        ("aws_key", #"(?<![0-9A-Za-z])AKIA[0-9A-Z]{16}(?![0-9A-Za-z])"#),
+        ("slack_token", #"(?<![0-9A-Za-z])xox[abprs]-[A-Za-z0-9\-]{10,}"#),
+        ("google_key", #"(?<![0-9A-Za-z])AIza[0-9A-Za-z_\-]{35}(?![0-9A-Za-z])"#),
+        ("jwt", #"(?<![0-9A-Za-z])eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"#),
+        ("rrn", #"(?<![0-9A-Za-z])\d{6}-?[1-4]\d{6}(?![0-9A-Za-z])"#),
         ("password", #"(?i)(password|passwd|pwd|비밀번호|비번)\s*[:=]\s*\S+"#),
     ].map { ($0.0, try! NSRegularExpression(pattern: $0.1)) }
 
-    private static let cardPattern = try! NSRegularExpression(pattern: #"\b(?:\d[ \-]?){13,19}\b"#)
+    private static let cardPattern = try! NSRegularExpression(pattern: #"(?<![0-9A-Za-z])(?:\d[ \-]?){13,19}(?![0-9A-Za-z])"#)
+
+    /// 마스킹이 먼저, 자르기는 나중에. 키·토큰이 한도에 걸쳐 앞부분만 남는 일을 막는다.
+    /// 정규식 비용을 묶으려고 한도보다 조금 넓은 창(limit + 20,000자)까지만 가린 뒤 limit자로 자른다.
+    static func redact(_ input: String, limit: Int) -> (String, Bool) {
+        let window = input.count > limit + 20_000 ? String(input.prefix(limit + 20_000)) : input
+        let (r, hit) = redact(window)
+        return (r.count > limit ? String(r.prefix(limit)) : r, hit)
+    }
 
     /// 마스킹된 문자열과 마스킹 여부.
     static func redact(_ input: String) -> (String, Bool) {

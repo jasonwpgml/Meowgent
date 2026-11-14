@@ -29,6 +29,20 @@ r = Privacy.redact("비밀번호: hunter2!! 입니다")
 check("비밀번호 문구 마스킹", !r.0.contains("hunter2"), r.0)
 r = Privacy.redact("그냥 평범한 문장 2026년 10월 14일")
 check("평범한 문장 유지", !r.1, r.0)
+r = Privacy.redact("주민번호 900101-1234567입니다")
+check("주민번호 뒤에 한글이 붙어도 마스킹", r.0.contains("[REDACTED:rrn]"), r.0)
+r = Privacy.redact("카드 4111 1111 1111 1111로 결제")
+check("카드번호 뒤에 한글이 붙어도 마스킹", r.0.contains("[REDACTED:card]"), r.0)
+r = Privacy.redact("주문번호1234567890123확인")
+check("한글 사이 Luhn 실패 숫자는 유지", !r.1, r.0)
+r = Privacy.redact("메모 -----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkq\nabcdef")
+check("END 없는 개인키도 끝까지 마스킹", r.1 && r.0.contains("[REDACTED:private_key]") && !r.0.contains("MIIEvQ") && !r.0.contains("abcdef"), r.0)
+let pem = "-----BEGIN RSA PRIVATE KEY-----\n" + String(repeating: "MIIEowIBAAKCAQEA\n", count: 20) + "-----END RSA PRIVATE KEY-----\n뒤"
+r = Privacy.redact(pem, limit: 100)
+check("한도 밖 END 줄의 개인키도 마스킹 후 자름", r.1 && !r.0.contains("MIIEow") && r.0.count <= 100, r.0)
+let tok = String(repeating: "가", count: 90) + " sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123"
+r = Privacy.redact(tok, limit: 100)
+check("한도에 걸친 토큰도 마스킹 후 자름", r.1 && !r.0.contains("sk-ant") && !r.0.contains("abcdef"), r.0)
 
 // 검색어 추출
 func q(_ u: String) -> String { Privacy.searchQuery(from: u).map { "\($0.engine):\($0.query)" } ?? "nil" }
