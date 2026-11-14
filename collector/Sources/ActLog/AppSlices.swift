@@ -3,7 +3,7 @@ import AppKit
 /// 맥 상태 카드(메뉴)와 대시보드(자세히)가 같이 쓰는 앱별 색 막대.
 /// 어느 쪽에서 보든 같은 앱은 같은 색이 되게 색 배정도 여기 한 곳에서 들고 있는다.
 enum AppSlices {
-    enum Kind { case cpu, memory, power }
+    enum Kind { case cpu, memory, power, gpu }
 
     /// 막대 하나: 조각들과, 막대 끝(100%)에 해당하는 값, 나머지 조각의 이름
     struct Metric {
@@ -30,6 +30,15 @@ enum AppSlices {
         let total = Double(ProcessInfo.processInfo.physicalMemory)
         return Metric(kind: .memory, slices: Resource.slices(items(s) { Double($0.memBytes) }, whole: total, filled: total * s.memUsed / 100),
                       whole: total, restName: "시스템·그 밖의 앱")
+    }
+
+    /// GPU: 내장 GPU 일 때만 앱별로 나눈다 (따로 단 GPU 는 nil → 한 색 막대). 막대 끝은 100%.
+    /// 앱 목록에 없는 시스템 프로세스(화면 그리기 등)도 따로 조각을 받는다
+    static func gpu(_ s: Resource.Sample) -> Metric? {
+        guard s.gpuBuiltIn, let g = s.gpu else { return nil }
+        let others = s.gpuOthers.map { (key: "gpu:" + $0.key, name: $0.key, value: $0.value) }
+        return Metric(kind: .gpu, slices: Resource.slices(items(s, \.gpu) + others, whole: 100, filled: g),
+                      whole: 100, restName: "그 밖의 앱·시스템")
     }
 
     static func appWatts(_ s: Resource.Sample) -> Double { s.everyApp.values.reduce(0) { $0 + $1.watts } }
@@ -109,6 +118,7 @@ enum AppSlices {
         case .cpu: return "\(name)  \(pctText) · 코어 \(Resource.cores(sl.value))개"
         case .memory: return "\(name)  \(Resource.bytes(UInt64(max(0, sl.value)))) (\(pctText))"
         case .power: return "\(name)  약 \(Resource.watts(sl.value))"
+        case .gpu: return "\(name)  \(pctText)"
         }
     }
 

@@ -15,6 +15,7 @@ enum Resource {
         var watts: Double
         var memBytes: UInt64
         var front: Bool               // 지금 앞에 있는 앱 (또는 그 앱이 띄운 프로세스)
+        var gpu: Double = 0           // GPU 를 쓴 시간 비율 0~100 (Apple 칩 내장 GPU 일 때만 앱별로 안다)
     }
 
     /// 전원·충전 (AppleSmartBattery 가 있는 맥만). 모르면 nil
@@ -43,12 +44,32 @@ enum Resource {
         var thermal: Int              // ProcessInfo.ThermalState 0~3
         var battery: Battery?
         var watts: Double?            // 배터리에서 끌어 쓰는 전력 (배터리로 쓸 때만)
-        var gpu: Double?              // 따로 단 GPU 가 있을 때만 0~100 (Apple 칩 내장 GPU 는 안 본다)
+        var gpu: Double?              // GPU 사용률 0~100. 따로 단 GPU 가 있으면 그것, 없으면 Apple 칩 내장 GPU
         var everyApp: [String: App] = [:]   // apps 는 상위 몇 개뿐이라, 정리 판단은 이걸 본다
         var own: Own? = nil
         var disk: Disk? = nil               // 시동 디스크 (1분에 한 번 읽는다)
         var power: Power? = nil
+        var gpuBuiltIn = false              // gpu 가 Apple 칩 내장 GPU 값인지 (화면 그리기도 같이 써서 알림은 안 한다)
+        var gpuOthers: [String: Double] = [:]   // 앱 목록에 없는 프로세스(WindowServer 등 시스템)의 GPU 사용률, 이름 → 0~100
     }
+
+    // MARK: GPU
+
+    /// 내장 GPU 클라이언트가 쌓은 GPU 시간(ns, pid 별 합) 두 번 → pid 별 사용률 (GPU 시간 / 걸린 시간 × 100).
+    /// 처음 보는 pid 는 비교할 값이 없어 빠지고, 줄었으면 (클라이언트가 닫힘·pid 재사용) 0 이다.
+    /// 다 더하면 GPU 자체가 내는 'Device Utilization %' 의 그 사이 평균과 거의 같다 (M5 에서 46% ↔ 48%, 44% ↔ 45%).
+    static func gpuShares(prev: [Int32: UInt64], now: [Int32: UInt64], dt: TimeInterval) -> [Int32: Double] {
+        guard dt > 0 else { return [:] }
+        var out: [Int32: Double] = [:]
+        for (pid, t) in now {
+            guard let p = prev[pid] else { continue }
+            out[pid] = t >= p ? Double(t - p) / (dt * 1e9) * 100 : 0
+        }
+        return out
+    }
+
+    /// 화면에 보일 시스템 프로세스 이름
+    static func gpuProcessName(_ name: String) -> String { name == "WindowServer" ? "화면 그리기 (WindowServer)" : name }
 
     // MARK: 저장공간
 
@@ -228,8 +249,10 @@ enum Resource {
             }
         }
 
-        // GPU: 따로 단 GPU 만. 앞에 있는 앱이 제일 바쁘면 (게임·렌더링) 말하지 않는다
-        if let g = s.gpu, g >= busyGPU, top?.front != true {
+        // GPU: 따로 단 GPU 만 (내장 GPU 는 화면 그리기·영상만으로도 쉽게 찬다).
+        // 앞에 있는 앱이 제일 바쁘면 (게임·렌더링) 말하지 않는다. 앱별 GPU 를 알면 GPU 를 제일 많이 쓰는 앱으로 본다
+        let gpuTop = s.apps.contains { $0.gpu > 0 } ? s.apps.max { $0.gpu < $1.gpu } : top
+        if let g = s.gpu, !s.gpuBuiltIn, g >= busyGPU, gpuTop?.front != true {
             out.append(Alert(key: "gpu:busy", kind: .gpu,
                              text: "🎮 GPU가 5분째 꽉 차 있다냥 (\(Int(g))%)\n뒤에서 뭔가 돌고 있는지 봐 달라냥",
                              short: "🎮 GPU \(Int(g))%", urgent: false, hold: 300))

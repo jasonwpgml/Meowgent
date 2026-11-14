@@ -1,8 +1,8 @@
 import AppKit
 
 /// 메뉴 맨 위에 붙는 맥 상태 카드 (메뉴바 메뉴·고양이 우클릭 메뉴 둘 다).
-/// CPU·메모리·전력·저장공간·배터리(·GPU)를 막대로, 이어지는 문제와 앱 색 범례를 한 줄씩. 누르면 대시보드를 연다.
-/// CPU·메모리·전력 막대는 앱별 색 조각으로 나눠 그리고, 조각에 마우스를 올리면 그 줄 설명 자리에 앱 이름과 양이 뜬다.
+/// CPU·GPU·메모리·전력·저장공간·배터리를 막대로, 이어지는 문제와 앱 색 범례를 한 줄씩. 누르면 대시보드를 연다.
+/// CPU·GPU(내장일 때)·메모리·전력 막대는 앱별 색 조각으로 나눠 그리고, 조각에 마우스를 올리면 그 줄 설명 자리에 앱 이름과 양이 뜬다.
 /// (메뉴 안이라 macOS 툴팁은 늦게 뜨거나 안 떠서 직접 그린다.)
 /// 메뉴가 열려 있는 동안 2초마다 새로 읽는다. 색은 시스템 색이라 밝은·어두운 메뉴 모두 맞는다.
 final class ResourceCard: NSView {
@@ -102,6 +102,10 @@ final class ResourceCard: NSView {
         var out: [Row] = []
         out.append(Row(name: "CPU", value: "\(Int(s.cpu))%", fraction: s.cpu / 100, level: s.cpu >= Resource.busyCPU ? 1 : 0,
                        detail: "코어 \(s.cores)개 · 최근 10분", spark: hist.map(\.cpu), metric: AppSlices.cpu(s)))
+        if let g = s.gpu {
+            out.append(Row(name: "GPU", value: "\(Int(g))%", fraction: g / 100, level: !s.gpuBuiltIn && g >= Resource.busyGPU ? 1 : 0,
+                           detail: s.gpuBuiltIn ? "내장 GPU · 화면 그리기 포함" : "따로 단 GPU", spark: hist.compactMap(\.gpu), metric: AppSlices.gpu(s)))
+        }
 
         let total = ProcessInfo.processInfo.physicalMemory
         let used = UInt64(Double(total) * s.memUsed / 100)
@@ -123,10 +127,6 @@ final class ResourceCard: NSView {
             let level = b.onBattery && b.percent <= 10 ? 2 : (b.onBattery && b.percent <= 20 ? 1 : 0)
             out.append(Row(name: "배터리", value: "\(b.percent)%", fraction: Double(b.percent) / 100, level: level,
                            detail: ResourceDashboard.batteryLine(b, watts: s.watts), risk: true))
-        }
-        if let g = s.gpu {
-            out.append(Row(name: "GPU", value: "\(Int(g))%", fraction: g / 100, level: g >= Resource.busyGPU ? 1 : 0,
-                           detail: "따로 단 GPU", spark: hist.compactMap(\.gpu)))
         }
         return out
     }
@@ -229,7 +229,7 @@ final class ResourceCard: NSView {
             y += Self.lineH
         }
 
-        // 색 범례: 막대에 나온 앱 (CPU 순 → 메모리 → 전력), 들어가는 만큼
+        // 색 범례: 막대에 나온 앱 (막대들에서 차지한 몫이 큰 순), 들어가는 만큼
         guard !legend.isEmpty else {
             text("조용하다냥", NSRect(x: pad, y: y, width: w - pad * 2, height: 16), size: 11, color: .secondaryLabelColor)
             return

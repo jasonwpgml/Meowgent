@@ -8,8 +8,8 @@ struct NoticeDetail {
     let hide: () -> Void
 }
 
-/// 맥 상태 대시보드: 알림이 왜 떴는지 + CPU·메모리·전력·저장공간·발열·배터리(·GPU) 막대와 최근 10분 선 + 많이 쓰는 앱.
-/// CPU·메모리·전력 막대는 메뉴 카드처럼 앱별 색 조각이고, 조각에 마우스를 올리면 그 줄 설명 자리에 앱 이름과 양이 뜬다.
+/// 맥 상태 대시보드: 알림이 왜 떴는지 + CPU·GPU·메모리·전력·저장공간·발열·배터리 막대와 최근 10분 선 + 많이 쓰는 앱.
+/// CPU·GPU(내장일 때)·메모리·전력 막대는 메뉴 카드처럼 앱별 색 조각이고, 조각에 마우스를 올리면 그 줄 설명 자리에 앱 이름과 양이 뜬다.
 /// 미리보기는 마우스가 말풍선이나 이 창 위에 있는 동안만 떠 있고, 누르면 고정된다. 고정은 ×·Esc·바깥 클릭으로 닫는다.
 final class ResourceDashboard: NSObject {
     private unowned let watch: ResourceWatch
@@ -145,21 +145,29 @@ final class ResourceDashboard: NSObject {
         let hist = watch.history
         let kind = focus?.kind
 
-        let cpuBar = AppSlices.cpu(s), memBar = AppSlices.memory(s), powerBar = AppSlices.power(s)
-        // 색은 몫이 큰 앱 다섯까지만, 나머지 앱은 각 막대의 '기타'로 (메뉴 카드와 같은 규칙·같은 색)
-        let prepared = AppSlices.prepare([cpuBar, memBar] + (powerBar.map { [$0] } ?? [])).metrics
+        let cpuBar = AppSlices.cpu(s), memBar = AppSlices.memory(s), powerBar = AppSlices.power(s), gpuBar = AppSlices.gpu(s)
+        // 색은 몫이 큰 앱 다섯까지만, 나머지 앱은 각 막대의 '기타'로 (메뉴 카드와 같은 규칙·같은 색, 막대 순서도 카드와 같게)
+        let bars = [cpuBar] + (gpuBar.map { [$0] } ?? []) + [memBar] + (powerBar.map { [$0] } ?? [])
+        let prepared = AppSlices.prepare(bars).metrics
+        func bar(_ k: AppSlices.Kind) -> AppSlices.Metric? { prepared.first { $0.kind == k } }
         rows.cpu.set(value: "\(Int(s.cpu))%", fraction: s.cpu / 100, level: s.cpu >= Resource.busyCPU ? 1 : 0,
-                     detail: "코어 \(s.cores)개", spark: hist.map(\.cpu), sparkMax: 100, focused: kind == .cpu, metric: prepared[0])
+                     detail: "코어 \(s.cores)개", spark: hist.map(\.cpu), sparkMax: 100, focused: kind == .cpu, metric: bar(.cpu))
+        rows.gpu.isHidden = s.gpu == nil
+        if let g = s.gpu {
+            rows.gpu.set(value: "\(Int(g))%", fraction: g / 100, level: !s.gpuBuiltIn && g >= Resource.busyGPU ? 1 : 0,
+                         detail: s.gpuBuiltIn ? "내장 GPU · 화면 그리기 포함" : "따로 단 GPU",
+                         spark: hist.compactMap(\.gpu), sparkMax: 100, focused: kind == .gpu, metric: bar(.gpu))
+        }
         rows.memory.set(value: "\(Int(s.memUsed))%", fraction: s.memUsed / 100, level: s.pressure,
                         detail: "압박 \(Resource.pressureName[min(s.pressure, 2)]) · 스왑 \(Resource.bytes(s.swapBytes))",
-                        spark: hist.map(\.memUsed), sparkMax: 100, focused: kind == .memory, metric: prepared[1])
+                        spark: hist.map(\.memUsed), sparkMax: 100, focused: kind == .memory, metric: bar(.memory))
         // 전력: 배터리로 쓸 땐 배터리에서 끄는 전력, 전원에 꽂혀 있으면 맥이 재는 소모 / 충전 전력과 충전기 최대 W
         let watts = AppSlices.totalWatts(s)
         let power = hist.map(AppSlices.totalWatts)
         let focusKey = focus?.key ?? ""
         let powerText = AppSlices.powerTexts(s)
         rows.power.set(value: powerText.value, fraction: watts / max(30, watts), level: 0, detail: powerText.detail,
-                       spark: power, sparkMax: max(30, power.max() ?? 0), focused: focusKey.hasPrefix("energy:"), metric: powerBar == nil ? nil : prepared[2])
+                       spark: power, sparkMax: max(30, power.max() ?? 0), focused: focusKey.hasPrefix("energy:"), metric: bar(.power))
         rows.disk.isHidden = s.disk == nil
         if let d = s.disk {
             rows.disk.set(value: "\(Resource.diskSize(d.free)) 남음", fraction: d.usedFraction, level: Resource.diskLevel(d),
@@ -176,24 +184,20 @@ final class ResourceDashboard: NSObject {
                              detail: Self.batteryLine(b, watts: s.watts), spark: hist.compactMap { $0.battery.map { Double($0.percent) } },
                              sparkMax: 100, focused: focusKey.hasPrefix("battery:"), risk: true)
         }
-        rows.gpu.isHidden = s.gpu == nil
-        if let g = s.gpu {
-            rows.gpu.set(value: "\(Int(g))%", fraction: g / 100, level: g >= Resource.busyGPU ? 1 : 0, detail: "따로 단 GPU",
-                         spark: hist.compactMap(\.gpu), sparkMax: 100, focused: kind == .gpu)
-        }
 
-        // 알림 종류에 맞춰 정렬: 메모리면 메모리 순, 에너지면 전력 순, 나머지는 CPU 순
+        // 알림 종류에 맞춰 정렬: 메모리면 메모리 순, 에너지면 전력 순, GPU 면 GPU 순, 나머지는 CPU 순
         let ignored = Set(watch.ignored.keys)
         let sorted: [Resource.App]
         switch kind {
         case .memory: sorted = s.apps.sorted { $0.memBytes > $1.memBytes }; appsTitle.stringValue = "많이 쓰는 앱 · 메모리 순"
         case .energy: sorted = s.apps.sorted { $0.watts > $1.watts }; appsTitle.stringValue = "많이 쓰는 앱 · 전력 순"
+        case .gpu where s.gpuBuiltIn: sorted = s.apps.sorted { $0.gpu > $1.gpu }; appsTitle.stringValue = "많이 쓰는 앱 · GPU 순"
         default: sorted = s.apps.sorted { $0.cpu > $1.cpu }; appsTitle.stringValue = "많이 쓰는 앱 · CPU 순"
         }
         for (i, r) in appRows.enumerated() {
             if i < sorted.count {
                 let a = sorted[i]
-                r.set(a, highlighted: a.key == focus?.app?.key, ignored: ignored.contains(a.key))
+                r.set(a, highlighted: a.key == focus?.app?.key, ignored: ignored.contains(a.key), gpuKnown: s.gpuBuiltIn)
                 r.isHidden = false
             } else {
                 r.isHidden = true
@@ -345,7 +349,7 @@ final class ResourceDashboard: NSObject {
         let ownHead = NSStackView(views: [ownTitle, NSView(), ownCount])
         let ownRows: [NSView] = [own.cpu, own.memory, own.diskNow, own.diskTotal, own.netNow, own.netTotal, own.data] + ownParts
 
-        let views: [NSView] = [header, focusBox, ignoreButton, buildCleanBox(), rows.cpu, rows.memory, rows.power, rows.disk, rows.thermal, rows.battery, rows.gpu,
+        let views: [NSView] = [header, focusBox, ignoreButton, buildCleanBox(), rows.cpu, rows.gpu, rows.memory, rows.power, rows.disk, rows.thermal, rows.battery,
                                Self.separator(), appsTitle, colHead] + appRows + [Self.separator(), ownHead] + ownRows + [footer]
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
@@ -600,11 +604,11 @@ private final class KeyValueRow: NSStackView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-/// 앱 한 줄: 이름 · CPU · 메모리 · 전력
+/// 앱 한 줄: 이름 · CPU · GPU · 메모리 · 전력
 private final class AppRow: NSStackView {
     private let name = NSTextField(labelWithString: "")
-    private let cols = [NSTextField(labelWithString: ""), NSTextField(labelWithString: ""), NSTextField(labelWithString: "")]
-    static let widths: [CGFloat] = [48, 58, 44]
+    private let cols = (0..<4).map { _ in NSTextField(labelWithString: "") }
+    static let widths: [CGFloat] = [40, 36, 54, 42]
 
     convenience init() {
         self.init(frame: .zero)
@@ -621,7 +625,7 @@ private final class AppRow: NSStackView {
     }
 
     static func header() -> NSStackView {
-        let labels = ["CPU", "메모리", "전력"].map { NSTextField(labelWithString: $0) }
+        let labels = ["CPU", "GPU", "메모리", "전력"].map { NSTextField(labelWithString: $0) }
         for (l, w) in zip(labels, widths) {
             l.font = .systemFont(ofSize: 10); l.alignment = .right
             l.textColor = ResourceDashboard.cream.withAlphaComponent(0.45)
@@ -632,7 +636,8 @@ private final class AppRow: NSStackView {
         return s
     }
 
-    func set(_ a: Resource.App, highlighted: Bool, ignored: Bool) {
+    /// gpuKnown: 앱별 GPU 를 아는지 (따로 단 GPU 면 모른다 → '–')
+    func set(_ a: Resource.App, highlighted: Bool, ignored: Bool, gpuKnown: Bool) {
         let base = highlighted ? ResourceDashboard.amber : ResourceDashboard.cream
         let s = NSMutableAttributedString(string: a.name, attributes: [.foregroundColor: base, .font: NSFont.systemFont(ofSize: 12, weight: highlighted ? .semibold : .regular)])
         let tag = [a.front ? "지금 쓰는 앱" : nil, ignored ? "안 알림" : nil].compactMap { $0 }.joined(separator: " · ")
@@ -642,8 +647,9 @@ private final class AppRow: NSStackView {
         }
         name.attributedStringValue = s
         cols[0].stringValue = "\(Int(a.cpu.rounded()))%"
-        cols[1].stringValue = Resource.bytes(a.memBytes)
-        cols[2].stringValue = a.watts >= 0.05 ? Resource.watts(a.watts) : "–"
+        cols[1].stringValue = gpuKnown && a.gpu >= 0.5 ? "\(Int(a.gpu.rounded()))%" : (gpuKnown ? "0%" : "–")
+        cols[2].stringValue = Resource.bytes(a.memBytes)
+        cols[3].stringValue = a.watts >= 0.05 ? Resource.watts(a.watts) : "–"
         for c in cols { c.textColor = base.withAlphaComponent(highlighted ? 1 : 0.85) }
     }
 }

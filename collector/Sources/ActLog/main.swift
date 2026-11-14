@@ -47,6 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     /// 메뉴 막대가 밝아지거나 어두워지면 손을 다시 그린다 (배터리 손은 템플릿이 아니라 색을 직접 정함)
     private var menuBarAppearance: NSKeyValueObservation?
+    /// 메뉴바 손을 마지막으로 그린 바탕 (어두운 메뉴 막대인지). 같으면 외관 알림이 와도 다시 그리지 않는다
+    private var iconDrawnDark: Bool?
     var resumeTimer: Timer?
     var permissionTimer: Timer?
     var axStarted = false
@@ -327,8 +329,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
-        menuBarAppearance = statusItem.button?.observe(\.effectiveAppearance) { [weak self] _, _ in
-            DispatchQueue.main.async { self?.updateStatusIcon() }
+        // 그림을 바꾸면 AppKit 이 화면마다 메뉴 막대 사본을 다시 그리며 외관을 다시 넣어 이 알림이 또 온다.
+        // 그대로 다시 그리면 끝없이 돌아서 (코어 하나의 80%) 밝음·어두움이 실제로 바뀐 때만 그린다
+        menuBarAppearance = statusItem.button?.observe(\.effectiveAppearance) { [weak self] button, _ in
+            let dark = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            DispatchQueue.main.async {
+                guard let self, self.iconDrawnDark != dark else { return }
+                self.updateStatusIcon()
+            }
         }
         updateStatusIcon()
     }
@@ -346,6 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let busy = level >= 2 ? " · 맥이 많이 바쁘다냥" : (level == 1 ? " · 맥이 바쁘다냥" : "")
         let power = battery.map { " · 배터리 \($0.percent)%" + ($0.charging ? " 충전 중" : ($0.onBattery ? "" : " 전원 연결")) } ?? ""
         let dark = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        iconDrawnDark = dark
         button.image = MenuBarIcon.image(percent: battery?.percent, plugged: battery.map { !$0.onBattery } ?? false,
                                          fill: level >= 2 ? .systemRed : (level == 1 ? .systemOrange : nil), dark: dark,
                                          number: resources.batteryNumberOn)

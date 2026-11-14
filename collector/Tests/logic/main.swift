@@ -322,6 +322,18 @@ do {
     check("배터리 10% 아래는 급함", Resource.alerts(sample([], battery: low)).map { "\($0.key) \($0.urgent)" } == ["battery:10 true"])
     check("GPU: 앞 앱이 제일 바쁘면 말 안 함", keys(sample([app("Game", cpu: 150, front: true)], gpu: 99)).isEmpty
           && keys(sample([app("Game", cpu: 5)], gpu: 99)) == ["gpu:busy"])
+    var builtIn = sample([app("Game", cpu: 5)], gpu: 99); builtIn.gpuBuiltIn = true
+    check("GPU: 내장 GPU 는 꽉 차도 말 안 함", keys(builtIn).isEmpty)
+    var gpuFront = app("Game", cpu: 5, front: true); gpuFront.gpu = 80
+    var gpuBack = app("Chrome", cpu: 150); gpuBack.gpu = 5
+    check("GPU: 앱별을 알면 GPU 제일 많이 쓰는 앱으로 앞뒤를 봄", !keys(sample([gpuFront, gpuBack], gpu: 99)).contains("gpu:busy"))
+
+    // 내장 GPU 앱별 사용률
+    let shares = Resource.gpuShares(prev: [1: 1_000_000_000, 2: 5_000_000_000, 3: 9], now: [1: 1_500_000_000, 2: 4_000_000_000, 4: 7], dt: 2)
+    check("GPU 시간 → 사용률 (2초 중 0.5초 = 25%)", abs((shares[1] ?? -1) - 25) < 1e-9, "\(shares)")
+    check("GPU 시간이 줄면 0, 처음 보는 pid·사라진 pid 는 빠짐", shares[2] == 0 && shares[3] == nil && shares[4] == nil, "\(shares)")
+    check("걸린 시간이 0 이면 비움", Resource.gpuShares(prev: [1: 0], now: [1: 5], dt: 0).isEmpty)
+    check("WindowServer 는 알아보게", Resource.gpuProcessName("WindowServer").contains("화면 그리기") && Resource.gpuProcessName("foo") == "foo")
 
     // hold · 한 번만 · 30초 끊김은 이어진 것으로 · 1시간 쿨다운
     var tr = Resource.Tracker()

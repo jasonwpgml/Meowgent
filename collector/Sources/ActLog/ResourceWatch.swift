@@ -3,7 +3,7 @@ import Darwin
 import IOKit
 import IOKit.ps
 
-/// CPU·메모리·발열·에너지(배터리)·GPU 를 10초마다 읽어서, 오래 이어지는 문제만 고양이 말풍선으로 알린다 (규칙: ResourceRules).
+/// CPU·메모리·발열·에너지(배터리)·GPU(앱별) 를 10초마다 읽어서, 오래 이어지는 문제만 고양이 말풍선으로 알린다 (규칙: ResourceRules).
 /// 말풍선을 2초 올려 두거나 누르면 ResourceDashboard 가 열린다. 대시보드가 떠 있는 동안은 2초마다 읽는다.
 /// 관리자 권한 없이 읽히는 것만 쓴다: 다른 사용자·시스템(root) 프로세스는 앱 목록에서 빠진다. 외부로 보내는 것 없음.
 final class ResourceWatch: NSObject {
@@ -268,6 +268,7 @@ private final class Sampler {
     private var netBatches = 0
     private var lastAt: TimeInterval = 0
     private var names: [pid_t: (start: UInt64, key: String, name: String)] = [:]
+    private var lastGPU: [Int32: UInt64] = [:]
     private let timebase: Double = { var t = mach_timebase_info(); mach_timebase_info(&t); return Double(t.numer) / Double(t.denom) }()
 
     /// 앱이 띄운 도우미·터미널에서 돌린 명령을 그 앱으로 묶는다 (활성 상태 보기도 쓰는 함수, 없으면 자기 자신)
@@ -280,13 +281,22 @@ private final class Sampler {
         let now = ProcessInfo.processInfo.systemUptime
         let ticks = cpuTicks()
         let procs = processes()
-        defer { lastTicks = ticks; lastProc = procs; lastAt = now }
+        let gpuNow = Self.builtInGPUClients()
+        defer { lastTicks = ticks; lastProc = procs; lastAt = now; lastGPU = gpuNow?.times ?? [:] }
         guard let prev = lastTicks, now - lastAt > 0.5 else { return nil }
         let dt = now - lastAt
 
         let d = zip(ticks, prev).map { Double($0 &- $1) }
         let total = d.reduce(0, +)
         let cpu = total > 0 ? (d[0] + d[1] + d[3]) / total * 100 : 0   // user + system + nice
+
+        // GPU: 따로 단 GPU 가 있으면 그 사용률만, 없으면 내장 GPU 를 클라이언트(프로세스)별로 나눠 본다
+        let discrete = discreteGPU()
+        let gpuShares = discrete == nil && gpuNow != nil ? Resource.gpuShares(prev: lastGPU, now: gpuNow!.times, dt: dt) : [:]
+        var gpuOthers: [String: Double] = [:]
+        for (pid, g) in gpuShares where procs[pid] == nil && g > 0 {   // 앱 목록에 못 넣는 시스템 프로세스
+            gpuOthers[Resource.gpuProcessName(gpuNow?.names[pid] ?? "pid \(pid)"), default: 0] += g
+        }
 
         var apps: [String: Resource.App] = [:]
         for (pid, p) in procs {
@@ -297,18 +307,20 @@ private final class Sampler {
                 a.watts += Double(p.energyNj &- q.energyNj) / (dt * 1e9)
             }
             a.memBytes += p.mem
+            a.gpu += gpuShares[pid] ?? 0
             if let fp = frontPath, key == fp { a.front = true }
             if let fpid = frontPID, pid == fpid { a.front = true }
             apps[key] = a
         }
         names = names.filter { procs[$0.key] != nil }
 
-        // 표에 쓸 만큼만: CPU·전력·메모리 상위 6개씩
+        // 표에 쓸 만큼만: CPU·전력·메모리·GPU 상위 6개씩 (GPU 는 쓴 앱만)
         let all = Array(apps.values)
         var keep: [String: Resource.App] = [:]
         for sort in [{ (a: Resource.App, b: Resource.App) in a.cpu > b.cpu }, { $0.watts > $1.watts }, { $0.memBytes > $1.memBytes }] {
             for a in all.sorted(by: sort).prefix(6) { keep[a.key] = a }
         }
+        for a in all.filter({ $0.gpu > 0 }).sorted(by: { $0.gpu > $1.gpu }).prefix(6) { keep[a.key] = a }
 
         let own = ownUsage(procs, dt: dt, now: now)
         let bat = battery()
@@ -317,8 +329,10 @@ private final class Sampler {
                                apps: keep.values.sorted { $0.cpu > $1.cpu }, memUsed: 100 - Double(sysctlInt("kern.memorystatus_level") ?? 100),
                                pressure: [1: 0, 2: 1, 4: 2][sysctlInt("kern.memorystatus_vm_pressure_level") ?? 1] ?? 0,
                                swapBytes: swapUsed(), thermal: ProcessInfo.processInfo.thermalState.rawValue,
-                               battery: bat, watts: bat?.onBattery == true ? batteryWatts() : nil, gpu: discreteGPU(),
-                               everyApp: apps, own: own, disk: disk, power: bat == nil ? nil : powerInfo())
+                               battery: bat, watts: bat?.onBattery == true ? batteryWatts() : nil,
+                               gpu: discrete ?? (gpuNow == nil ? nil : min(100, gpuShares.values.reduce(0, +))),
+                               everyApp: apps, own: own, disk: disk, power: bat == nil ? nil : powerInfo(),
+                               gpuBuiltIn: discrete == nil && gpuNow != nil, gpuOthers: gpuOthers)
     }
 
     /// 시동 디스크 전체·사용 가능 용량 (Finder 의 '사용 가능'과 같은 값)
@@ -566,5 +580,38 @@ private final class Sampler {
             best = max(best ?? 0, u.doubleValue)
         }
         return best
+    }
+
+    /// Apple 칩 내장 GPU(AGX…)를 연 클라이언트들이 쌓은 GPU 시간 (ns, pid 별 합)과 프로세스 이름.
+    /// 활성 상태 보기의 GPU 열과 같은 값 (IOUserClientCreator "pid 611, WindowServer" · AppUsage[].accumulatedGPUTime).
+    /// 관리자 권한 없이 읽힌다. 내장 GPU 가 없으면 nil
+    private static func builtInGPUClients() -> (times: [Int32: UInt64], names: [Int32: String])? {
+        var it: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOAccelerator"), &it) == KERN_SUCCESS else { return nil }
+        defer { IOObjectRelease(it) }
+        var agx: io_service_t = 0
+        while case let s = IOIteratorNext(it), s != 0 {
+            var cls = [CChar](repeating: 0, count: 128)
+            IOObjectGetClass(s, &cls)
+            if agx == 0, String(cString: cls).hasPrefix("AGX") { agx = s } else { IOObjectRelease(s) }
+        }
+        guard agx != 0 else { return nil }
+        defer { IOObjectRelease(agx) }
+        var children: io_iterator_t = 0
+        guard IORegistryEntryGetChildIterator(agx, kIOServicePlane, &children) == KERN_SUCCESS else { return nil }
+        defer { IOObjectRelease(children) }
+        var times: [Int32: UInt64] = [:], names: [Int32: String] = [:]
+        while case let c = IOIteratorNext(children), c != 0 {
+            defer { IOObjectRelease(c) }
+            func prop(_ k: String) -> Any? { IORegistryEntryCreateCFProperty(c, k as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() }
+            guard let creator = prop("IOUserClientCreator") as? String, creator.hasPrefix("pid "),
+                  let usage = prop("AppUsage") as? [[String: Any]] else { continue }
+            let parts = creator.dropFirst(4).split(separator: ",", maxSplits: 1)
+            guard let first = parts.first, let pid = Int32(first) else { continue }
+            let t = usage.reduce(UInt64(0)) { $0 &+ (($1["accumulatedGPUTime"] as? NSNumber)?.uint64Value ?? 0) }
+            times[pid, default: 0] &+= t
+            if names[pid] == nil, parts.count > 1 { names[pid] = parts[1].trimmingCharacters(in: .whitespaces) }
+        }
+        return (times, names)
     }
 }
