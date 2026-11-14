@@ -127,6 +127,9 @@ def run_tools(allow, granted):
             on.add(t)
     return sorted(on)
 ALLOW_ONCE, ALLOW_ALWAYS, DENY = "이번만 허락", "항상 허락", "안 돼"
+# 답한 지 이만큼 지난 inbox/done 답은 처리하지 않는다. done 파일은 계속 남는데 처리 표시(seen)는 3일 뒤 잊혀서,
+# 옛 '이번만 허락'이 3일마다 새 답처럼 다시 실행된 적이 있다 (2026-11-14 발견). state.json 을 잃었을 때도 같은 보호가 된다
+ANSWER_MAX_AGE = 86400
 
 # 대화로 시키는 일 (actions). 실행은 앱(MindBridge)의 고정 코드가 맡고, code 만 여기서 worktree 로 돌린다
 ACTIONS = {
@@ -913,6 +916,9 @@ class Mind:
                 continue
             o = read_json(f, {})
             self.st["seen"][key] = self.now()
+            when = o.get("resolved") or o.get("created")
+            if isinstance(when, (int, float)) and not isinstance(when, bool) and self.now() - when > ANSWER_MAX_AGE:
+                continue   # 묵은 답: 대화 기록에도 다시 넣지 않고, 허락·실행도 다시 하지 않는다
             ans = o.get("answer")
             perm = o.get("perm")
             if isinstance(perm, dict) and perm.get("tool") in TOOLS:

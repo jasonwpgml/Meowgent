@@ -236,6 +236,27 @@ check("허락 → 웹 켜고 같은 질문 다시", tools == ["web"] and "최신
 check("도구 켜면 창 제목 안 보냄", "Code 창" not in p)
 check("이번만 허락은 저장 안 함", m.cfg["allow"] == [])
 
+# 15-1) 묵은 답은 다시 처리하지 않는다: done 파일은 남고 처리 표시(seen)는 3일 뒤 잊히지만, 옛 허락이 다시 실행되면 안 된다
+def answers(m): return [c for c in M.conversation(m.dir, 200) if c.get("kind") == "answer"]
+def granted(m): return [j for j in m.codex.started if j[0].get("granted")]
+n_ans, n_run = len(answers(m)), len(granted(m))
+m.tick()
+clock.t += 4 * 86400
+m.save()
+check("처리 표시는 3일 뒤 잊힌다 (전제)", not any(k.startswith("answer:") for k in m.st["seen"]), list(m.st["seen"]))
+m.tick(); clock.t += 10; m.tick()
+check("묵은 '이번만 허락'은 다시 실행 안 함", len(granted(m)) == n_run and not any(q.get("granted") for q in m.st.get("queued", [])),
+      (len(granted(m)), m.st.get("queued")))
+check("묵은 답은 대화 기록에도 다시 안 넣음", len(answers(m)) == n_ans, len(answers(m)))
+# 처리 표시를 통째로 잃어도(state.json 삭제) 하루 지난 답은 건너뛴다. 하루 안 된 답은 그대로 처리한다
+m.st["seen"] = {}
+m.tick()
+check("처리 표시를 잃어도 묵은 답은 건너뜀", len(granted(m)) == n_run and len(answers(m)) == n_ans)
+fresh = dict(item, id="mind-perm-fresh", created=clock.t - 60, resolved=clock.t - 5)
+(data / "inbox" / "done" / "mind-perm-fresh.json").write_text(json.dumps(fresh, ensure_ascii=False))
+m.tick(); clock.t += 10; m.tick()
+check("방금 답한 허락은 그대로 처리", len(answers(m)) == n_ans + 1 and len(granted(m)) == n_run + 1, (len(answers(m)), len(granted(m))))
+
 # 16) 항상 허락(astra) → mind.json 에 남고, 다음부턴 안 묻고 astra 로 넘긴다
 m, clock, data = make(T0)
 m.cfg["late_hours"] = [0, 0]
