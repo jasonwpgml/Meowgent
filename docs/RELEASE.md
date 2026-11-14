@@ -1,6 +1,6 @@
 # 배포 절차 (2026-10-21)
 
-소스는 비공개(GitHub private `jasonwpgml/Meowgent`). 사용자는 랜딩 페이지나 public 저장소의 Releases에서 받는다.
+소스는 2026-10-26부터 공개(GitHub public `jasonwpgml/Meowgent`, Apache-2.0)이고 고양이(`pet/`)만 비공개다. 사용자는 랜딩 페이지나 Releases에서 받는다 (아직 릴리스 없음).
 빌드 산출물은 `collector/release.sh` → `collector/dist/`.
 
 ## 두 가지 길

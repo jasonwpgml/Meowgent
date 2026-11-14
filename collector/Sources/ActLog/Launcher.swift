@@ -84,6 +84,7 @@ final class Launcher: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     }
 
     private func registerHotKeys() {
+        hotKey?.unregister()   // 옛 단축키(⌘Space ↔ ⌘⇧Space)를 풀고 새로 건다
         hotKey = nil
         let space = 49, v = 9   // kVK_Space, kVK_ANSI_V
         hotKey = HotKey(keyCode: space, modifiers: cmdKey | (useCmdSpace ? 0 : shiftKey))

@@ -9,6 +9,7 @@ final class HotKey {
     var onUp: (() -> Void)?
 
     private var ref: EventHotKeyRef?
+    private var id: UInt32 = 0
     private static var handlerInstalled = false
     private static var byID: [UInt32: HotKey] = [:]
     private static var nextID: UInt32 = 1
@@ -24,7 +25,15 @@ final class HotKey {
             Log.write("전역 단축키 등록 실패 (\(status)) — 다른 앱이 쓰고 있을 수 있다")
             return nil
         }
+        self.id = id
         HotKey.byID[id] = self
+    }
+
+    /// 단축키를 푼다. byID 가 self 를 잡고 있어 nil 로 놓는 것만으로는 deinit 이 안 불리므로, 바꿀 때는 이걸 먼저 부른다
+    func unregister() {
+        if let ref { UnregisterEventHotKey(ref) }
+        ref = nil
+        HotKey.byID[id] = nil
     }
 
     deinit {
