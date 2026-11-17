@@ -14,8 +14,10 @@ struct Snapshot {
     /// 모르는 동안은 막힌 것으로 본다 (fail-closed).
     var urlUnknown = false
     var paused = false
+    /// 앞 앱을 한 번이라도 읽었는지. 손쉬운 사용 권한 전에는 앞에 무엇이 있는지 모르므로 막힌 것으로 본다 (fail-closed).
+    var ready = false
 
-    var blocked: Bool { appBlocked || urlBlocked || incognito || urlUnknown }
+    var blocked: Bool { !ready || appBlocked || urlBlocked || incognito || urlUnknown }
 }
 
 final class Context {
@@ -66,6 +68,22 @@ struct Config: Codable {
     /// Safari는 개인 정보 보호 창을 스크립트로 구분할 수 없다. 기본(false)은 Safari 페이지의 주소·내용을 기록하지 않는다.
     /// true로 켜면 기록하되 개인 정보 보호 창도 같이 기록된다.
     var trustSafari = false
+    /// 보존 기간(일). 입력 글·복사·붙여넣기·검색어·AI 답변은 contentRetentionDays, 나머지 기록은 retentionDays 가 지나면 지운다. 0 = 안 지움.
+    /// brain.db 의 구간 요약(입력 글·질문이 들어 있음)도 contentRetentionDays 가 지나면 비운다.
+    var contentRetentionDays = 30
+    var retentionDays = 180
+    /// 지우기 전에 보관할 곳 ("ssh호스트:경로", brain/archive.py 가 sftp로 올린다). 있으면 보관이 끝난 시각(archive.json)까지만 지운다.
+    var archiveTo: String? = nil
+
+    /// 보관을 켰으면 지워도 되는 시각의 상한. 보관을 안 켰으면 nil (상한 없음), 켰는데 아직 보관한 게 없으면 0 (아무것도 안 지움).
+    func purgeLimit(dataDir: URL) -> Double? {
+        guard let t = archiveTo, !t.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        let url = dataDir.appendingPathComponent("archive.json")
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let through = obj["through"] as? Double else { return 0 }
+        return through
+    }
 
     init() {}
 
@@ -87,6 +105,9 @@ struct Config: Codable {
         aiResponsesFromDesktopApps = try c.decodeIfPresent(Bool.self, forKey: .aiResponsesFromDesktopApps) ?? d.aiResponsesFromDesktopApps
         maxAIResponseChars = try c.decodeIfPresent(Int.self, forKey: .maxAIResponseChars) ?? d.maxAIResponseChars
         trustSafari = try c.decodeIfPresent(Bool.self, forKey: .trustSafari) ?? d.trustSafari
+        contentRetentionDays = try c.decodeIfPresent(Int.self, forKey: .contentRetentionDays) ?? d.contentRetentionDays
+        retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? d.retentionDays
+        archiveTo = try c.decodeIfPresent(String.self, forKey: .archiveTo)
     }
 
     static func load(dir: URL) -> Config {

@@ -29,13 +29,19 @@ BINS = {"claude": "claude", "codex": "codex", "cursor": "cursor-agent", "grok": 
 EXTRA_PATH = [str(Path.home() / ".local/bin"), str(Path.home() / ".grok/bin"), "/opt/homebrew/bin", "/usr/local/bin"]
 # Claude Code 는 acceptEdits(파일 고치기만 자동). 확인용 명령만 더 연다 (빌드·테스트는 아래 샌드박스 안에서만 돈다)
 CLAUDE_TOOLS = ["Bash(git diff:*)", "Bash(git status:*)", "Bash(git log:*)", "Bash(swift build:*)", "Bash(python3 -I:*)", "Bash(ls:*)"]
-# Codex 는 자체 샌드박스(workspace-write)가 있다. 나머지 셋은 자동 승인으로 돌므로 macOS 샌드박스(sandbox-exec)로 감싼다.
+# 넷 다 macOS 샌드박스(sandbox-exec)로 감싼다. Codex 자체 샌드박스(workspace-write)는 쓰기만 막고 디스크 전체를 읽을 수 있어서
+# (데이터 폴더의 actlog.db 포함), 바깥 샌드박스 안에서 자체 샌드박스는 끄고(danger-full-access) 돌린다. 샌드박스는 겹쳐 걸 수 없다.
 # 쓰기: worktree(그 .git 연결 파일은 빼고) · 임시 폴더 · 도구가 대화 기록을 남기는 폴더만. 도구 설정·hook·플러그인·실행 파일,
 # 저장소 .git 폴더, ~/.gitconfig 는 못 쓴다 (밖에서 다시 돌 때 실행될 수 있는 곳이라서).
 # 읽기: 키 폴더(~/.ssh 등)와 Meowgent 데이터 폴더는 막는다. 네트워크(모델 API)는 막지 않는다.
-SANDBOXED = {"claude", "cursor", "grok"}
+SANDBOXED = {"claude", "codex", "cursor", "grok"}
 # 2026-11-04 실측: Claude Code 는 홈에 못 써도 끝낸다. Cursor 는 projects·chats, Grok 은 sessions 가 없으면 시작을 못 한다
-TOOL_STATE = {"claude": [], "cursor": [".cursor/projects", ".cursor/chats"], "grok": [".grok/sessions", ".grok/logs"]}
+TOOL_STATE = {"claude": [], "cursor": [".cursor/projects", ".cursor/chats"], "grok": [".grok/sessions", ".grok/logs"],
+              "codex": [".codex/sessions", ".codex/log", ".codex/tmp", ".codex/.tmp", ".codex/cache", ".codex/shell_snapshots",
+                        ".codex/thread-writer-locks", ".codex/ipc", ".codex/project-metadata-locks"]}
+# Codex 는 ~/.codex 바로 아래 sqlite·잠금 파일·토큰 갱신(auth.json)도 쓴다. config.toml·hooks.json·AGENTS.md·rules·plugins·skills 는 못 쓴다
+TOOL_STATE_FILES = {"codex": r"^{home}/\.codex/([^/]+\.(sqlite|sqlite-wal|sqlite-shm|sqlite-journal|lock)|auth\.json|models_cache\.json|"
+                             r"session_index\.jsonl|history\.jsonl|installation_id|\.codex-global-state\.json(\.bak)?)$"}
 SECRET_DIRS = [".ssh", ".aws", ".gnupg", ".config/gh", ".netrc", ".git-credentials", ".docker", ".kube", ".codex",
                ".codex-meowgent", ".agents/fingerprint", ".config/gcloud", ".azure"]
 
@@ -47,7 +53,10 @@ def sandbox_profile(agent, wt, data_dir=None):
     q = lambda p: str(p) if '"' not in str(p) and "\\" not in str(p) else None
     allow = [wt, "/private/tmp", "/private/var/folders", home / "Library/Caches", *(home / h for h in TOOL_STATE.get(agent, []))]
     w = " ".join(f'(subpath "{q(a)}")' for a in allow if q(a))
-    secrets = " ".join(f'(subpath "{q(home / h)}")' for h in SECRET_DIRS if q(home / h))
+    if agent in TOOL_STATE_FILES and q(home):
+        w += ' (regex #"' + TOOL_STATE_FILES[agent].format(home=re.escape(str(home))) + '")'
+    own = {".codex"} if agent == "codex" else set()   # 자기 계정 폴더는 읽어야 로그인된다
+    secrets = " ".join(f'(subpath "{q(home / h)}")' for h in SECRET_DIRS if h not in own and q(home / h))
     data = ""
     if data_dir and q(data_dir):   # 데이터 폴더는 못 읽고, worktree 까지 가는 상위 폴더는 목록만 (getcwd 가 그걸 읽는다)
         ups = [u for u in wt.parents if u == data_dir or data_dir in u.parents]
@@ -113,7 +122,8 @@ def command(agent, bin_path, prompt, wt, last):
             cmd += ["--allowedTools", t]
         return cmd
     if agent == "codex":
-        return [bin_path, "exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "--color", "never",
+        # 바깥 sandbox-exec 가 가둔다 (SANDBOXED). Codex 자체 샌드박스는 그 안에서 다시 걸 수 없다
+        return [bin_path, "exec", "--skip-git-repo-check", "--sandbox", "danger-full-access", "--color", "never",
                 "-C", str(wt), "-o", str(last), prompt]
     if agent == "cursor":
         return [bin_path, "-p", "--trust", "--force", "--output-format", "json", "--workspace", str(wt), prompt]

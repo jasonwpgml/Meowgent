@@ -28,6 +28,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -514,7 +515,8 @@ class Codex:
         return None
 
     def prune_sessions(self, keep_s=86400):
-        """세션 기록에는 보낸 프롬프트(활동 요약)가 들어 있다. 하루 지난 것은 지운다"""
+        """세션 기록에는 보낸 프롬프트(활동 요약)가 들어 있다. 하루 지난 것은 지운다.
+        Codex 는 같은 내용을 sqlite(대화 목록·대화 내용)에도 남기므로 거기서도 지운다. 돌고 있을 땐 건드리지 않는다"""
         cut = time.time() - keep_s
         for f in (self.home / "sessions").glob("**/rollout-*.jsonl"):
             try:
@@ -522,6 +524,58 @@ class Codex:
                     f.unlink()
             except OSError:
                 pass
+        for d in sorted((self.home / "sessions").glob("**/*"), reverse=True):   # 빈 날짜 폴더
+            if d.is_dir():
+                try:
+                    d.rmdir()
+                except OSError:
+                    pass
+        if not self.busy:
+            prune_codex_db(self.home, cut)
+
+
+def prune_codex_db(home, cut):
+    """Codex sqlite 에서 cut(초) 전에 시작한 대화를 지운다. 표 이름은 Codex 버전마다 바뀔 수 있어 없는 표는 건너뛴다.
+    지운 자리는 0으로 덮는다(secure_delete). 돌려주는 값: 지운 대화 수"""
+    old = []
+    for path in sorted(Path(home).glob("state_*.sqlite")):
+        try:
+            with closing(sqlite3.connect(path, timeout=2)) as db:
+                db.execute("PRAGMA secure_delete=ON")
+                old += [r[0] for r in db.execute("SELECT id FROM threads WHERE created_at < ?", (int(cut),))]
+                for t in ("thread_dynamic_tools", "thread_attachments", "thread_spawn_edges", "thread_read_receipts"):
+                    try:
+                        db.execute(f"DELETE FROM {t} WHERE thread_id IN (SELECT id FROM threads WHERE created_at < ?)", (int(cut),))
+                    except sqlite3.Error:
+                        pass
+                db.execute("DELETE FROM threads WHERE created_at < ?", (int(cut),))
+                db.commit()
+                db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error as e:
+            log(f"Codex 대화 목록 정리 실패 ({path.name}): {e}")
+    for path in sorted(Path(home).glob("thread_history_*.sqlite")):
+        try:
+            with closing(sqlite3.connect(path, timeout=2)) as db:
+                db.execute("PRAGMA secure_delete=ON")
+                for t in ("thread_items", "thread_realtime_items"):
+                    try:
+                        db.execute(f"DELETE FROM {t} WHERE created_at_ms < ?", (int(cut * 1000),))
+                    except sqlite3.Error:
+                        pass
+                for i in range(0, len(old), 500):
+                    ids = old[i:i + 500]
+                    for t in ("thread_turns", "thread_items", "thread_realtime_items", "thread_history_projection_state"):
+                        try:
+                            db.execute(f"DELETE FROM {t} WHERE thread_id IN ({','.join('?' * len(ids))})", ids)
+                        except sqlite3.Error:
+                            pass
+                db.commit()
+                db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error as e:
+            log(f"Codex 대화 내용 정리 실패 ({path.name}): {e}")
+    if old:
+        log(f"Codex 대화 기록 {len(old)}개 지움 (하루 지난 것)")
+    return len(old)
 
 
 # ───────────────────────── 기억 (pet/docs/CAT_MEMORY.md) ─────────────────────────

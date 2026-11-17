@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 /// 브라우저 현재 탭의 URL·제목 (AppleScript).
 /// osascript 자식 프로세스로 돌리면 허용 창이 안 뜨고 조용히 거부된다(launchd로 띄운 경우 특히).
@@ -26,6 +27,32 @@ final class BrowserWatcher {
     static func isBrowser(_ bundle: String?) -> Bool {
         guard let bundle else { return false }
         return chromium.contains(bundle) || safari.contains(bundle)
+    }
+
+    /// 주소를 읽을 수 없는 브라우저 (AppleScript 를 지원하지 않음)
+    static let knownOthers: Set<String> = [
+        "org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition", "org.mozilla.nightly", "org.mozilla.librewolf",
+        "net.waterfox.waterfox", "app.zen-browser.zen", "org.torproject.torbrowser", "com.kagi.kagimacOS",
+        "com.duckduckgo.macos.browser", "com.sigmaos.sigmaos.macos", "com.google.chrome.for.testing",
+    ]
+    private static var webHandlers: Set<String> = []
+    private static var webHandlersAt = Date.distantPast
+
+    /// 목록 밖 브라우저인지: 알려진 것 + https 주소와 HTML 파일을 둘 다 여는 앱 (터미널·편집기·AI 앱은 뺀다:
+    /// iTerm 처럼 링크를 열겠다고 등록하는 앱이 있다). 메인 스레드 전용.
+    static func isOtherBrowser(_ bundle: String?) -> Bool {
+        guard let bundle, !isBrowser(bundle), bundle != Bundle.main.bundleIdentifier else { return false }
+        if knownOthers.contains(bundle) { return true }
+        if Date().timeIntervalSince(webHandlersAt) > 600 {
+            webHandlersAt = Date()
+            let ws = NSWorkspace.shared
+            let ids = { (urls: [URL]) in Set(urls.compactMap { Bundle(url: $0)?.bundleIdentifier }) }
+            webHandlers = ids(ws.urlsForApplications(toOpen: URL(string: "https://example.com")!))
+                .intersection(ids(ws.urlsForApplications(toOpen: .html)))
+        }
+        let c = Privacy.config
+        return webHandlers.contains(bundle) && !c.textSkipBundles.contains(bundle) && !c.editorBundles.contains(bundle)
+            && Privacy.aiDesktopApps[bundle] == nil
     }
 
     init(store: Store) {

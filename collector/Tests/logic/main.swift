@@ -1,3 +1,4 @@
+import SQLite3
 // 순수 로직 점검: swiftc로 수집기 소스와 함께 컴파일해서 실행 (tests/run_logic.sh)
 import Foundation
 var failed = 0
@@ -242,8 +243,8 @@ check("오래된 날짜 정리", l2.entries[tab.id]!.mouse.isEmpty)
 
 // 브라우저 주소를 모르는 동안은 막힌 것으로 본다 (자동화 권한 거부·응답 전·Safari)
 do {
-    var snap = Snapshot()
-    check("기본은 안 막힘", !snap.blocked)
+    var snap = Snapshot(ready: true)
+    check("앞 앱을 읽은 뒤 기본은 안 막힘", !snap.blocked)
     snap.urlUnknown = true
     check("주소 모르면 막힘", snap.blocked)
     snap.urlUnknown = false; snap.incognito = true
@@ -749,6 +750,51 @@ do {
           first["count"] as? Int == 1 && again["count"] as? Int == 2 && again["created"] as? Double == base
           && again["updated"] as? Double == base + 100 && again["announced"] as? Double == base + 5 && again["id"] as? String == "k")
     check("중요도 이름", SuggestRules.rank(0.7) == "중요" && SuggestRules.rank(0.4) == "보통" && SuggestRules.rank(0.1) == "나중에 봐도 됨")
+}
+
+// MARK: 준비 전·보존 기간
+do {
+    check("앞 앱을 읽기 전에는 막힘", Snapshot().blocked && !Snapshot(ready: true).blocked)
+    let old = try! JSONDecoder().decode(Config.self, from: Data("{\"captureClipboard\": true}".utf8))
+    check("보존 기간 기본값 (예전 config.json)", old.contentRetentionDays == 30 && old.retentionDays == 180)
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("actlog-purge-\(getpid())")
+    try? FileManager.default.removeItem(at: dir)
+    let store = try! Store(dir: dir)
+    let now = Date().timeIntervalSince1970
+    for (src, days) in [("text", 40.0), ("text", 10.0), ("window", 40.0), ("window", 200.0), ("clipboard", 31.0), ("app", 1.0)] {
+        var e = Event(src); e.ts = now - days * 86400; store.write(e, force: true)
+    }
+    var db: OpaquePointer?
+    sqlite3_open(store.path.path, &db)
+    func left() -> String {
+        store.flush()
+        var st: OpaquePointer?
+        sqlite3_prepare_v2(db, "SELECT group_concat(source || ':' || CAST(round((\(now) - ts) / 86400) AS INT), ',') FROM (SELECT source, ts FROM events ORDER BY ts)", -1, &st, nil)
+        defer { sqlite3_finalize(st) }
+        sqlite3_step(st)
+        return sqlite3_column_text(st, 0).map { String(cString: $0) } ?? ""
+    }
+    let all = "window:200,text:40,window:40,clipboard:31,text:10,app:1"
+    store.purge(contentDays: 30, allDays: 180, limit: 0, now: now)
+    check("보관한 게 없으면 안 지움", left() == all, left())
+    store.purge(contentDays: 30, allDays: 180, limit: now - 35 * 86400, now: now)
+    check("보관이 끝난 데까지만 지움", left() == "window:40,clipboard:31,text:10,app:1", left())
+    store.purge(contentDays: 30, allDays: 180, now: now)
+    store.purge(contentDays: 0, allDays: 0, now: now)
+    check("보존 기간: 글 내용은 30일, 나머지는 180일", left() == "window:40,text:10,app:1", left())
+    sqlite3_close(db)
+
+    var cfg = Config()
+    check("보관 안 켰으면 상한 없음", cfg.purgeLimit(dataDir: dir) == nil)
+    cfg.archiveTo = "samsung:/C:/arch"
+    check("켰는데 archive.json 이 없으면 0", cfg.purgeLimit(dataDir: dir) == 0)
+    try! Data("{\"through\": 1700000000.5, \"files\": []}".utf8).write(to: dir.appendingPathComponent("archive.json"))
+    check("archive.json 의 through 가 상한", cfg.purgeLimit(dataDir: dir) == 1700000000.5)
+    cfg.archiveTo = "  "
+    check("빈 archiveTo 는 안 켠 것", cfg.purgeLimit(dataDir: dir) == nil)
+    let fromFile = try! JSONDecoder().decode(Config.self, from: Data("{\"archiveTo\": \"samsung:/x\"}".utf8))
+    check("config.json 의 archiveTo 읽기", fromFile.archiveTo == "samsung:/x" && Config().archiveTo == nil)
+    try? FileManager.default.removeItem(at: dir)
 }
 
 print(failed == 0 ? "\n모두 통과" : "\n실패 \(failed)건")

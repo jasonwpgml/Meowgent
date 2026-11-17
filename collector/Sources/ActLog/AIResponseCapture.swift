@@ -42,8 +42,9 @@ final class AIResponseCapture {
         guard var j = job else { timer?.invalidate(); return }
         var read = j.webArea.flatMap { AIResponseCapture.pageText($0) }
         if read == nil || read?.0.isEmpty == true {
-            // 페이지가 새로 로드되면(검색 → AI 모드 등) 예전 요소는 무효 → 앞 창에서 다시 찾는다
-            if let w = AIResponseCapture.findWebArea(pid: j.pid) {
+            // 페이지가 새로 로드되면(검색 → AI 모드 등) 예전 요소는 무효 → 앞 창에서 다시 찾는다.
+            // 단 지금 앞에 있는 게 같은 AI 페이지일 때만: 탭을 옮겼으면 은행·시크릿 같은 다른 페이지를 읽게 된다
+            if AIResponseCapture.sameContext(j), let w = AIResponseCapture.findWebArea(pid: j.pid) {
                 j.webArea = w
                 read = AIResponseCapture.pageText(w)
             }
@@ -85,6 +86,15 @@ final class AIResponseCapture {
         var e = Event("ai_response", payload: payload, privacy: (masked || promptMasked) ? "masked" : "none")
         e.app = j.appName; e.bundle = j.bundle; e.pid = j.pid; e.url = j.url; e.window = j.window
         store.write(e)
+    }
+
+    /// 지금 앞 문맥이 질문을 보낸 곳과 같은지: 같은 앱, 막히지 않음, 웹이면 같은 사이트.
+    private static func sameContext(_ j: Job) -> Bool {
+        let s = Context.shared.snapshot
+        guard s.pid == j.pid, !s.blocked else { return false }
+        guard let start = j.url else { return true }   // 데스크톱 앱
+        guard let now = s.url, let a = URL(string: start)?.host?.lowercased(), let b = URL(string: now)?.host?.lowercased() else { return false }
+        return a == b
     }
 
     /// 질문 이후에 새로 생긴 글 = 답변.

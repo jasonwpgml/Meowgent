@@ -18,6 +18,8 @@ final class AppWatcher {
     private var currentAppElement: AXUIElement?
     private var lastWindowKey = ""
     private var titleDebounce: Timer?
+    /// 문맥(앱·탭·창)이 바뀌기 직전. 막힌 곳에서 방금 한 복사를 바뀐 문맥으로 잘못 기록하지 않게 클립보드를 먼저 확인한다.
+    var beforeContextChange: (() -> Void)?
 
     init(store: Store, text: TextCapture, browser: BrowserWatcher) {
         self.store = store
@@ -41,6 +43,7 @@ final class AppWatcher {
 
     private func activated(_ app: NSRunningApplication) {
         if app.bundleIdentifier == Bundle.main.bundleIdentifier { return }
+        beforeContextChange?()
         text.appDeactivated()
         current = app
         let pid = app.processIdentifier
@@ -52,7 +55,9 @@ final class AppWatcher {
             $0.app = name; $0.bundle = bundle; $0.pid = pid
             $0.window = nil; $0.url = nil
             $0.appBlocked = blocked; $0.urlBlocked = false; $0.incognito = false
-            $0.urlUnknown = BrowserWatcher.isBrowser(bundle)
+            // 목록 밖 브라우저(Firefox 등)는 주소를 읽을 방법이 없어 늘 모르는 상태 = 막힘
+            $0.urlUnknown = BrowserWatcher.isBrowser(bundle) || BrowserWatcher.isOtherBrowser(bundle)
+            $0.ready = true
         }
         var e = Event("app", payload: ["event": "activate"], privacy: blocked ? "blocked" : "none")
         e.app = name; e.bundle = bundle; e.pid = pid
@@ -95,10 +100,17 @@ final class AppWatcher {
 
     func handle(_ notification: String, element: AXUIElement) {
         guard let app = current, let pid = AX.pid(element), pid == app.processIdentifier else { return }
+        let browserApp = BrowserWatcher.isBrowser(app.bundleIdentifier)
         switch notification {
         case kAXFocusedWindowChangedNotification, kAXMainWindowChangedNotification:
+            beforeContextChange?()
             refreshWindow()
         case kAXTitleChangedNotification:
+            // 브라우저 제목이 바뀌면 탭이 바뀌었을 수 있다: 새 주소를 읽기 전까지는 직전 주소로 판정하지 않는다
+            if browserApp {
+                beforeContextChange?()
+                Context.shared.update { if $0.pid == pid { $0.urlUnknown = true } }
+            }
             // 터미널·브라우저 등은 제목이 연달아 바뀐다 → 0.4초 몰아서 처리
             titleDebounce?.invalidate()
             titleDebounce = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
@@ -122,17 +134,22 @@ final class AppWatcher {
         let title = win.flatMap { AX.string($0, kAXTitleAttribute) } ?? ""
         let doc = win.flatMap { AX.string($0, kAXDocumentAttribute) }
         let key = "\(app.processIdentifier)|\(title)"
+        let browserBundle = BrowserWatcher.isBrowser(app.bundleIdentifier) ? app.bundleIdentifier : nil
         if key != lastWindowKey {
             lastWindowKey = key
-            Context.shared.update { $0.window = title.isEmpty ? nil : title }
+            Context.shared.update {
+                $0.window = title.isEmpty ? nil : title
+                if browserBundle != nil { $0.url = nil; $0.urlUnknown = true }
+            }
+            // 브라우저는 새 주소를 먼저 읽고 나서 창 기록을 남긴다 (못 읽으면 모르는 상태 = 막힘으로 남는다)
+            if let b = browserBundle { browser.refresh(bundle: b) }
             let s = Context.shared.snapshot
             var e = Event("window", privacy: s.blocked ? "blocked" : "none")
             if let doc, !s.blocked { e.payload["document"] = Privacy.sanitize(url: doc) ?? doc }
             e.fillContext(s)
             store.write(e)
-        }
-        if BrowserWatcher.isBrowser(app.bundleIdentifier) {
-            browser.refresh(bundle: app.bundleIdentifier!)
+        } else if let b = browserBundle {
+            browser.refresh(bundle: b)
         }
     }
 }

@@ -575,6 +575,13 @@ check("커밋할 때 저장소 hook 은 안 돈다", not (repo.parent / "hook-ra
 prof = M.code_tasks.sandbox_profile("claude", Path("/w/wt"), Path("/d"))
 check("샌드박스: 키 폴더·데이터 읽기 막고 worktree 만 연다", '(literal "/w/wt/.git")' in prof and ".ssh" in prof
       and '(deny file-read-data (subpath "/d"))' in prof and prof.endswith('(allow file-read* (subpath "/w/wt"))') and ".claude" not in prof)
+prof = M.code_tasks.sandbox_profile("codex", Path("/w/wt"), Path("/d"))
+home = str(Path.home().resolve())
+check("샌드박스(Codex): 자기 계정 폴더는 읽고 기록만 쓴다, 설정은 못 쓴다",
+      f'(subpath "{home}/.codex")' not in prof and f'{home}/.codex-meowgent' in prof and f'(subpath "{home}/.codex/sessions")' in prof
+      and "auth\\.json" in prof and "config" not in prof.split("deny file-read*")[0] and "hooks" not in prof and '(deny file-read-data (subpath "/d"))' in prof)
+check("Codex 는 바깥 샌드박스 안에서 자체 샌드박스를 끈다", "codex" in M.code_tasks.SANDBOXED
+      and "danger-full-access" in M.code_tasks.command("codex", "codex", "p", "/w", "/l"))
 bad = {**t, "git_link": "gitdir: /elsewhere\n"}
 check(".git 연결이 바뀌었으면 커밋 안 함", m.tasks.commit(bad) == (0, "") and "커밋하지 않았다" in bad["error"])
 merge = next((data / "inbox").glob("mind-code-*.json"), None)
@@ -748,6 +755,25 @@ rows.append({"id": "c", "ev": "shown", "src": "agent", "tag": "context"})
 r = holdout_report.report(rows)
 check("홀드아웃: 끝남만 세고 컨텍스트는 뺌", "보여 줌 30건 · 안 보여 줌 30건" in r, r)
 check("홀드아웃: 2분 안 비율 차이와 판단", "2분 안에 그 앱으로 감: 보여 줌 70%" in r and "안 보여 줌 0%" in r and "유지" in r, r)
+
+# Codex sqlite 에 남은 대화 지우기
+cxh = Path(tempfile.mkdtemp())
+with sqlite3.connect(cxh / "state_5.sqlite") as db:
+    db.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, created_at INTEGER, first_user_message TEXT)")
+    db.executemany("INSERT INTO threads VALUES(?,?,?)", [("old", 1000, "오래된 활동 요약"), ("new", 5000, "오늘 요약")])
+with sqlite3.connect(cxh / "thread_history_1.sqlite") as db:
+    db.execute("CREATE TABLE thread_items (thread_id TEXT, created_at_ms INTEGER, item_json TEXT)")
+    db.execute("CREATE TABLE thread_turns (thread_id TEXT, turn_id TEXT)")
+    db.executemany("INSERT INTO thread_items VALUES(?,?,?)", [("old", 9_000_000, "x"), ("new", 5_000_000, "y"), ("orphan", 1_000_000, "z")])
+    db.executemany("INSERT INTO thread_turns VALUES(?,?)", [("old", "t1"), ("new", "t2")])
+check("Codex DB: 하루 지난 대화 수", M.prune_codex_db(cxh, 3000) == 1)
+with sqlite3.connect(cxh / "state_5.sqlite") as db:
+    check("Codex DB: 대화 목록에서 지움", [r[0] for r in db.execute("SELECT id FROM threads")] == ["new"])
+with sqlite3.connect(cxh / "thread_history_1.sqlite") as db:
+    left = sorted(r[0] for r in db.execute("SELECT thread_id FROM thread_items"))
+    check("Codex DB: 대화 내용은 오래된 대화 것·오래된 항목 지움", left == ["new"], left)
+    check("Codex DB: 턴도 지움", [r[0] for r in db.execute("SELECT thread_id FROM thread_turns")] == ["new"])
+check("Codex DB: 표가 없어도 안 죽음", M.prune_codex_db(Path(tempfile.mkdtemp()), 3000) == 0)
 
 print("\n" + ("모두 통과" if not failed else f"{failed}개 실패"))
 sys.exit(1 if failed else 0)

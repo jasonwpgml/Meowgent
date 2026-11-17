@@ -27,7 +27,7 @@ collector/        Swift 패키지. build.sh(개발 설치) · bundle.sh · relea
   PetStub/        고양이 저장소가 없을 때 쓰는 빈 껍데기 PetController (고양이 없이 수집기만)
   Tests/          순수 로직 테스트 (한글 diff·마스킹·검색어·단축키 규칙·한도 규칙, pet 있으면 지형 계산도)
 pet/              [서브모듈, 비공개] 고양이 행동·물리·그리기 약 5,300줄, 원화, CAT_MOTION·CAT_VOICE, 원화 잠금 도구
-brain/            actlog_brain.py · cat_mind.py(말하는 고양이) · install.sh(launchd) · mind_setup.sh · test_brain.py · test_mind.py
+brain/            actlog_brain.py · archive.py(지우기 전 보관) · cat_mind.py(말하는 고양이) · install.sh(launchd) · mind_setup.sh · test_brain.py · test_archive.py · test_mind.py
 assets/fonts/     갈무리11 (OFL)
 assets/vendor/    Last tick 팩 (재배포 금지, git에 없음, 개발 빌드 전용)
 assets/original-cat → pet/assets/original-cat 링크 (그림 작업 스크립트 호환용, git에 없음)

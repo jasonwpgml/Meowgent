@@ -51,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var iconDrawnDark: Bool?
     var resumeTimer: Timer?
     var permissionTimer: Timer?
+    var purgeTimer: Timer?
     var axStarted = false
     var tapStarted = false
 
@@ -82,6 +83,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Log.url = dataDir.appendingPathComponent("actlog.log")
         Privacy.config = Config.load(dir: dataDir)
         PhraseTable.current = PhraseTable.load(dir: dataDir)
+        purgeOld()
+        purgeTimer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.purgeOld() }
         Log.write("Meowgent \(AppDelegate.appVersion) 시작, DB: \(store.path.path)")
         // 활동 기록은 옵트인. 처음 켤 때 묻고, 이미 기록이 있던 설치는 켠 상태를 유지한다.
         if UserDefaults.standard.object(forKey: "recordingEnabled") == nil {
@@ -98,6 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         browser.aiResponses = aiResponses
         apps = AppWatcher(store: store, text: text, browser: browser)
         system = SystemWatcher(store: store, tap: tap)
+        apps.beforeContextChange = { [weak self] in self?.system.checkClipboard() }
         system.onAway = { [weak self] in self?.reactions.away() }
         tap.onKey = { [weak self] isReturn, shift in
             self?.text.keyPressed(isReturn: isReturn, shift: shift)
@@ -137,6 +141,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             self?.startWhenPermitted()
         }
+    }
+
+    func purgeOld() {
+        let c = Privacy.config
+        store.purge(contentDays: c.contentRetentionDays, allDays: c.retentionDays, limit: c.purgeLimit(dataDir: dataDir))
     }
 
     var recordingEnabled: Bool { UserDefaults.standard.bool(forKey: "recordingEnabled") }

@@ -21,6 +21,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # -I 로 떠도 옆의 archive.py 를 읽게
+import archive  # noqa: E402
+
 DATA = Path.home() / "Library/Application Support/ActLog"
 EVENTS_DB = DATA / "actlog.db"
 BRAIN_DB = DATA / "brain.db"
@@ -92,6 +95,22 @@ def log(msg):
             f.write(line)
     except OSError:
         pass
+
+
+def collector_config(path=None):
+    """수집기 config.json (보존 기간·보관할 곳). 없거나 깨졌으면 빈 dict"""
+    try:
+        c = json.loads((path or DATA / "config.json").read_text())
+    except (OSError, ValueError):
+        c = {}
+    return c if isinstance(c, dict) else {}
+
+
+def retention(path=None, cfg=None):
+    """수집기 config.json 의 보존 기간 (글 내용 일수, 전체 일수). 0 = 안 지움. 수집기(Config)와 같은 기본값"""
+    c = collector_config(path) if cfg is None else cfg
+    pick = lambda k, d: int(c[k]) if isinstance(c.get(k), (int, float)) and not isinstance(c.get(k), bool) else d
+    return pick("contentRetentionDays", 30), pick("retentionDays", 180)
 
 
 def load_json(path, default):
@@ -656,6 +675,43 @@ class Brain:
             return f"{a}?"
         return "미분류"
 
+    def tidy(self):
+        """보관할 곳(archiveTo)을 정했으면 먼저 보내고, 보낸 데까지만 지운다 (brain/archive.py)"""
+        cfg = collector_config()
+        days = retention(cfg=cfg)
+        try:
+            archive.run(cfg, DATA, self.wiki, days, log=log)
+        except Exception as e:  # noqa: BLE001 — 보관이 실패해도 판단은 계속. through 가 안 올라가 지우지도 않는다
+            log(f"오래된 기록 보관 중 오류: {type(e).__name__}: {e}")
+        return self.purge(days=days, limit=archive.limit(cfg, DATA))
+
+    def purge(self, now=None, days=None, limit=None):
+        """보존 기간: 글 내용이 든 구간 요약·하루 타임라인은 글 내용 기간, 구간 자체는 전체 기간이 지나면 지운다.
+        limit 은 보관이 끝난 시각: 그보다 나중 것은 기간이 지났어도 남긴다"""
+        now = now or time.time()
+        content, total = days or retention()
+        cap = float("inf") if limit is None else limit
+        self.db.execute("PRAGMA secure_delete=ON")
+        n = 0
+        if content > 0:
+            cut = min(now - content * 86400, cap)
+            n += self.db.execute("UPDATE episodes SET summary=NULL WHERE end < ? AND summary IS NOT NULL", (cut,)).rowcount
+            day = datetime.fromtimestamp(cut).strftime("%Y-%m-%d")
+            for f in (self.wiki / "timeline").glob("*.md"):
+                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", f.stem) and f.stem < day:
+                    f.unlink(missing_ok=True)
+                    n += 1
+        if total > 0:
+            cut = min(now - total * 86400, cap)
+            old = "SELECT id FROM episodes WHERE end < ?"
+            self.db.execute(f"DELETE FROM decisions WHERE episode_id IN ({old})", (cut,))
+            self.db.execute(f"DELETE FROM labels WHERE episode_id IN ({old})", (cut,))
+            n += self.db.execute("DELETE FROM episodes WHERE end < ?", (cut,)).rowcount
+        self.db.commit()
+        if n:
+            log(f"보존 기간 지난 요약·구간 {n}건 지움 (글 내용 {content}일, 전체 {total}일)")
+        return n
+
     def render(self):
         if not self.dirty:
             return
@@ -665,7 +721,7 @@ class Brain:
         eps = self.db.execute("SELECT id, start, end, status, app, title, summary FROM episodes WHERE end >= ? ORDER BY start", (day0,)).fetchall()
         rows = []
         for eid, st, en, status, app, title, summary in eps:
-            rows.append((eid, st, en, status, app, title, json.loads(summary), self.decisions(eid)))
+            rows.append((eid, st, en, status, app, title, json.loads(summary or "{}"), self.decisions(eid)))
 
         # 프로젝트·활동별 오늘 누적 (추정 이상만)
         by_proj, by_act = Counter(), Counter()
@@ -745,9 +801,14 @@ def run(loop=True):
     while b.judge_pending(budget=20, oldest_first=True):
         pass
     b.render()
+    b.tidy()
     if not loop:
         return b
+    next_purge = time.time() + 3600
     while True:
+        if time.time() >= next_purge:
+            next_purge = time.time() + 3600
+            b.tidy()
         b.ingest()
         b.judge_pending(budget=3)
         b.ask_unclear()

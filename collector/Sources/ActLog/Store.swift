@@ -110,6 +110,46 @@ final class Store {
         }
     }
 
+    /// 쌓인 쓰기가 끝날 때까지 기다린다.
+    func flush() { queue.sync {} }
+
+    /// 글 내용이 들어가는 기록 (보존 기간이 더 짧다)
+    static let contentSources = ["text", "clipboard", "paste", "search", "ai_response"]
+
+    /// 보존 기간이 지난 기록을 지운다 (0 = 안 지움). 지운 자리는 0으로 덮고(secure_delete) WAL 도 비운다.
+    /// limit: 보관을 켰을 때 보관이 끝난 시각. 그보다 나중 기록은 기간이 지났어도 남긴다.
+    func purge(contentDays: Int, allDays: Int, limit: Double? = nil, now: Double = Date().timeIntervalSince1970) {
+        queue.async { [self] in
+            var removed = 0
+            let cap = limit ?? .infinity
+            exec("PRAGMA secure_delete=ON;")
+            if contentDays > 0 {
+                let list = Store.contentSources.map { "'\($0)'" }.joined(separator: ",")
+                removed += delete("DELETE FROM events WHERE ts < ? AND source IN (\(list))", before: min(now - Double(contentDays) * 86400, cap))
+            }
+            if allDays > 0 {
+                removed += delete("DELETE FROM events WHERE ts < ?", before: min(now - Double(allDays) * 86400, cap))
+            }
+            if removed > 0 {
+                exec("PRAGMA wal_checkpoint(TRUNCATE);")
+                Log.write("보존 기간 지난 기록 \(removed)건 지움 (글 내용 \(contentDays)일, 전체 \(allDays)일)")
+            }
+        }
+    }
+
+    /// queue 안에서만 부른다.
+    private func delete(_ sql: String, before: Double) -> Int {
+        var st: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK, let st else { return 0 }
+        defer { sqlite3_finalize(st) }
+        sqlite3_bind_double(st, 1, before)
+        guard sqlite3_step(st) == SQLITE_DONE else {
+            Log.write("보존 기간 정리 실패: \(String(cString: sqlite3_errmsg(db)))")
+            return 0
+        }
+        return Int(sqlite3_changes(db))
+    }
+
     private func bindText(_ st: OpaquePointer, _ i: Int32, _ s: String?) {
         if let s { sqlite3_bind_text(st, i, s, -1, SQLITE_TRANSIENT) } else { sqlite3_bind_null(st, i) }
     }

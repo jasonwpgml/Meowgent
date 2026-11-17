@@ -102,5 +102,29 @@ b.ask_unclear(now + 61)
 check("답은 labels 로", b.db.execute("SELECT answer FROM labels WHERE episode_id=1").fetchall() == [("meowgent",)])
 check("답한 구간은 다시 안 묻는다", not (B.INBOX / "brain-ep-1.json").exists())
 
+# 보존 기간
+b.wiki = B.INBOX.parent / "wiki"
+(b.wiki / "timeline").mkdir(parents=True)
+for d in ("2020-01-01", "2999-01-01"):
+    (b.wiki / "timeline" / f"{d}.md").write_text("x")
+b.db.execute("INSERT INTO episodes(id,start,end,status,summary) VALUES(90,?,?,'closed','{}')", (now - 40 * 86400, now - 40 * 86400 + 60))
+b.db.execute("INSERT INTO episodes(id,start,end,status,summary) VALUES(91,?,?,'closed','{}')", (now - 200 * 86400, now - 200 * 86400 + 60))
+b.db.execute("INSERT INTO decisions VALUES(91,?,?,?,?,?,?,?,?)", (B.QSET, "project", "x", 1, "{}", now, 0, 1))
+b.purge(now, (30, 180), limit=now - 41 * 86400)
+check("보관이 끝난 데까지만 지움", b.db.execute("SELECT summary FROM episodes WHERE id=90").fetchone() == ("{}",)
+      and b.db.execute("SELECT count(*) FROM episodes WHERE id=91").fetchone() == (0,)
+      and sorted(f.stem for f in (b.wiki / "timeline").glob("*.md")) == ["2999-01-01"])
+b.purge(now, (30, 180), limit=0)
+check("보관한 게 없으면 안 지움", b.db.execute("SELECT summary FROM episodes WHERE id=90").fetchone() == ("{}",))
+b.purge(now, (30, 180))
+check("보존 기간: 30일 지난 요약은 비움", b.db.execute("SELECT summary FROM episodes WHERE id=90").fetchone() == (None,))
+check("보존 기간: 최근 요약은 그대로", b.db.execute("SELECT summary FROM episodes WHERE id=1").fetchone()[0] is not None)
+check("보존 기간: 180일 지난 구간·판단은 지움", b.db.execute("SELECT count(*) FROM episodes WHERE id=91").fetchone() == (0,)
+      and b.db.execute("SELECT count(*) FROM decisions WHERE episode_id=91").fetchone() == (0,))
+check("보존 기간: 오래된 타임라인만 지움", sorted(f.stem for f in (b.wiki / "timeline").glob("*.md")) == ["2999-01-01"])
+cfg = B.INBOX.parent / "config.json"
+cfg.write_text('{"contentRetentionDays": 0, "retentionDays": 7}')
+check("보존 기간 설정 읽기", B.retention(cfg) == (0, 7) and B.retention(B.INBOX.parent / "없음.json") == (30, 180))
+
 print("\n모두 통과" if not failed else f"\n실패 {failed}건")
 sys.exit(1 if failed else 0)

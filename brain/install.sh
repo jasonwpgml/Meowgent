@@ -16,6 +16,7 @@ reload_agent() {
 
 mkdir -p "$DEST"
 cp actlog_brain.py "$DEST/actlog_brain.py"
+cp archive.py "$DEST/archive.py"
 
 cat > "$PLIST" <<PL
 <?xml version="1.0" encoding="UTF-8"?>

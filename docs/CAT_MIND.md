@@ -350,17 +350,18 @@ cat_mind가 검사하고, 앱의 정해진 코드만 실행한다. 고양이 답
 | 도구 | 실행 |
 |---|---|
 | Claude Code | `claude -p … --output-format json --permission-mode acceptEdits` + 확인용 명령(`git diff/status/log`, `swift build`, `python3 -I`, `ls`)만 허용 |
-| Codex | `codex exec --sandbox workspace-write -C <worktree> -o last.txt` (고양이 계정이 아니라 평소 `~/.codex`) |
+| Codex | `codex exec --sandbox danger-full-access -C <worktree> -o last.txt` (바깥 `sandbox-exec`가 가둔다. 고양이 계정이 아니라 평소 `~/.codex`) |
 | Cursor | `cursor-agent -p --trust --force --workspace <worktree>` |
 | Grok | `grok -p … --always-approve --cwd <worktree>` |
 
-   - **샌드박스**: Codex는 자체 `workspace-write`. Claude Code·Cursor·Grok은 자동 승인으로 돌아서 `sandbox-exec`로 감싼다.
-     - 쓰기: worktree(그 안의 `.git` 연결 파일은 빼고)·임시 폴더·`~/Library/Caches`·도구가 대화 기록을 남기는 폴더(Cursor `~/.cursor/projects`·`chats`, Grok `~/.grok/sessions`·`logs`, Claude는 없음)만. 저장소 `.git`(hook·설정), `~/.gitconfig`, 도구 설정·hook·플러그인·스킬·실행 파일은 못 쓴다. 밖에서 다시 돌 때 실행되는 곳이라서다.
-     - 읽기: `~/.ssh`·`~/.aws`·`~/.gnupg`·`~/.config/gh`·`~/.codex*` 같은 키 폴더와 Meowgent 데이터 폴더(활동 기록·대화)는 막는다. 데이터 폴더 안의 worktree와 그리로 가는 상위 폴더 목록만 연다. 저장소 코드와 나머지 파일 읽기, 인터넷(모델 API)은 막지 않는다. 키체인도 막지 않는다(도구 로그인에 쓴다).
+   - **샌드박스**: 넷 다 `sandbox-exec`로 감싼다. Codex 자체 `workspace-write`는 쓰기만 막고 디스크 전체(데이터 폴더의 `actlog.db` 포함)를 읽을 수 있어서, 바깥 샌드박스 안에서 자체 샌드박스는 끄고 돌린다 (샌드박스는 겹쳐 걸 수 없다).
+     - 쓰기: worktree(그 안의 `.git` 연결 파일은 빼고)·임시 폴더·`~/Library/Caches`·도구가 대화 기록을 남기는 폴더(Cursor `~/.cursor/projects`·`chats`, Grok `~/.grok/sessions`·`logs`, Codex `~/.codex/sessions`·`log`·`tmp`·`cache`·`shell_snapshots` 등과 바로 아래 sqlite·잠금 파일·`auth.json`, Claude는 없음)만. 저장소 `.git`(hook·설정), `~/.gitconfig`, 도구 설정·hook·플러그인·스킬·실행 파일은 못 쓴다. 밖에서 다시 돌 때 실행되는 곳이라서다.
+     - 읽기: `~/.ssh`·`~/.aws`·`~/.gnupg`·`~/.config/gh`·`~/.codex*`(Codex 자신은 `~/.codex`를 읽는다) 같은 키 폴더와 Meowgent 데이터 폴더(활동 기록·대화)는 막는다. 데이터 폴더 안의 worktree와 그리로 가는 상위 폴더 목록만 연다. 저장소 코드와 나머지 파일 읽기, 인터넷(모델 API)은 막지 않는다. 키체인도 막지 않는다(도구 로그인에 쓴다).
      - 규칙 순서: 뒤에 온 같은 종류 규칙이 이긴다. `file-read-data`로 막은 것은 `file-read-data`로만 풀린다. 경로는 실제 경로로 풀어 쓴다(`/var` → `/private/var`).
    - **커밋 단계**(샌드박스 밖): 시작 때 기록한 git 폴더를 `GIT_DIR`·`GIT_WORK_TREE`로 못 박고, `core.hooksPath=/dev/null`·`core.fsmonitor=false`·`GIT_CONFIG_NOSYSTEM`·`--no-verify`로 돌린다. worktree의 `.git` 연결 파일이 시작 때와 다르면 커밋하지 않는다.
    - 확인 질문의 설명에 맡길 일 전체(1500자까지)를 보여 주고, 에이전트에게도 같은 글을 넘긴다.
    - 합치기는 사용자가 고른다. 합친 코드(빌드 스크립트·`.envrc` 등)는 그 뒤 사용자 환경에서 돌 수 있으니, 합치기 전에 브랜치를 보는 게 좋다.
+   - 2026-11-17 실측 (Codex 0.166): 가둔 Codex 가 작업 폴더에 파일을 만들고, 데이터 폴더 `config.json` 읽기·`~/.ssh` 목록·`~/.codex` 설정 쓰기는 모두 실패. `~/.codex/skills/.system` 설치 실패 오류가 stderr 에 남지만 작업은 끝난다.
    - 2026-11-04 실측: 샌드박스 안에서 `.git` 연결 파일·저장소 hook·worktree git 폴더·`~/.gitconfig`·`~/.claude`·`~/.grok` 설정 쓰기, `~/.ssh`·데이터 폴더 읽기가 모두 "Operation not permitted". 작업 폴더 안의 `git status`·읽기·쓰기는 된다. Claude Code는 홈에 아무것도 못 써도 작업을 끝냈다. Cursor는 `projects`, Grok은 `sessions`를 못 쓰면 시작을 못 해서 그 폴더만 열었다. 이 프로필로 진짜 세 도구가 동시에 파일 하나씩 만들어 커밋까지 끝냈고, 저장소에 심어 둔 pre-commit hook은 돌지 않았다.
 3. 에이전트에겐 커밋·푸시·브랜치 바꾸기·되돌리기 어려운 일을 하지 말고, 끝에 "바꾼 것 / 확인한 것 / 확인 못 한 것"을 쓰라고 한다. 끝나면 cat_mind가 worktree에서 커밋하고 말풍선으로 요약한다.
 4. 바뀐 파일이 있으면 "합치기 · 그대로 두기 · 버리기"를 묻는다. 합치기는 저장소가 시작 때 브랜치에 있고 커밋 안 한 변경이 없을 때만 `--no-ff`로 합친다. 충돌이면 되돌리고 브랜치를 남긴다. **푸시는 하지 않는다.**
