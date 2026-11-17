@@ -119,11 +119,11 @@ try:
         shutil.copy(put[1], get[3])
         class R: returncode = 0; stdout = ""; stderr = ""
         return R
-    digest = A.send(a, "samsung", "/C:/Users/J-Son/arch", "x.jsonl.gz", run=fake_run)
+    digest = A.send(a, "samsung", "/C:/Users/me/arch", "x.jsonl.gz", run=fake_run)
     cmd, batch = calls[0]
     check("sftp 는 BatchMode, 호스트는 마지막", cmd[0] == "sftp" and "BatchMode=yes" in cmd and cmd[-1] == "samsung")
     check("상위 폴더부터 -mkdir", [l for l in batch if l.startswith("-mkdir")]
-          == ['-mkdir "/C:"', '-mkdir "/C:/Users"', '-mkdir "/C:/Users/J-Son"', '-mkdir "/C:/Users/J-Son/arch"'], batch)
+          == ['-mkdir "/C:"', '-mkdir "/C:/Users"', '-mkdir "/C:/Users/me"', '-mkdir "/C:/Users/me/arch"'], batch)
     check("다시 받아 맞으면 sha256", digest == A.sha256(a))
     def bad_run(cmd, **kw):
         batch = Path(cmd[cmd.index("-b") + 1]).read_text().splitlines()
