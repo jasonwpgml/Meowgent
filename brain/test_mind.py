@@ -709,6 +709,34 @@ m.st.update(active_since=T0 - 30 * 3600 - 10, afk_cursor=2)    # 예전 상태: 
 m.read_afk()
 check("예전 상태면 쉬지 않은 시작점부터 다시 훑어 공백 반영", m.st["active_since"] == T0 - 120 and m.st["afk_cursor"] == 3, (m.st["active_since"] - T0, m.st["afk_cursor"]))
 
+# 민감한 곳의 AI 질문은 '비슷한 요청' 제안(→ 고양이·Codex)으로 안 쓴다
+m, clock, data = make(T0)
+db = sqlite3.connect(data / "actlog.db")
+db.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, ts REAL, source TEXT, payload TEXT, privacy TEXT NOT NULL DEFAULT 'none')")
+q = json.dumps({"kind": "ai_prompt", "reason": "enter", "ai": "chatgpt", "text": "내 계좌 잔고 이렇게 나오는데 이상해 보여?"}, ensure_ascii=False)
+db.executemany("INSERT INTO events(ts, source, payload, privacy) VALUES(?,?,?,?)",
+               [(T0 - 60 + i, "text", q, "sensitive") for i in range(5)])
+db.commit(); db.close()
+m.prompts = []
+m.read_afk()
+check("민감한 곳 질문은 고양이 쪽으로 안 감", m.prompts == [], m.prompts)
+
+# 민감한 곳이 섞인 구간은 창 제목·요약을 비워서 Codex 프롬프트에 안 들어간다
+bdb = sqlite3.connect(data / "brain.db")
+bdb.executescript("""DROP TABLE IF EXISTS episodes; DROP TABLE IF EXISTS decisions;
+CREATE TABLE episodes (id INTEGER PRIMARY KEY, start REAL, end REAL, status TEXT, app TEXT, bundle TEXT, ctx TEXT, title TEXT,
+  first_event INTEGER, last_event INTEGER, summary TEXT, summary_hash TEXT, judged_hash TEXT, judged_at REAL, sensitive INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE decisions (episode_id INTEGER, qset TEXT, question TEXT, answer TEXT, confidence REAL, probs TEXT, ts REAL, ms INTEGER, final INTEGER);""")
+bdb.execute("INSERT INTO episodes(id,start,end,status,app,title,summary,sensitive) VALUES(1,?,?,'closed','Chrome','KB국민은행 계좌조회',?,1)",
+            (T0 - 900, T0 - 600, json.dumps({"사이트/폴더": "kbstar.com", "AI에게 한 질문": ["잔고"]}, ensure_ascii=False)))
+bdb.execute("INSERT INTO episodes(id,start,end,status,app,title,summary) VALUES(2,?,?,'open','Xcode','Meowgent.swift',?)",
+            (T0 - 300, T0, json.dumps({"사이트/폴더": "Meowgent"})))
+bdb.commit(); bdb.close()
+eps = M.Situation(data / "brain.db").episodes(T0 - 3600)
+text = " / ".join(M.describe(e, "full", {}) for e in eps)
+check("민감 구간은 앱 이름만", "KB" not in text and "kbstar" not in text and "잔고" not in text and "Chrome" in text and "민감한 곳" in text, text)
+check("보통 구간은 그대로", "Meowgent.swift" in text, text)
+
 m, clock, data = make(T0)
 m.on_pause(T0)
 m.st["active_since"] = T0 - 3000

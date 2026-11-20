@@ -16,8 +16,18 @@ struct Snapshot {
     var paused = false
     /// 앞 앱을 한 번이라도 읽었는지. 손쉬운 사용 권한 전에는 앞에 무엇이 있는지 모르므로 막힌 것으로 본다 (fail-closed).
     var ready = false
+    /// 민감한 곳(막는 사이트·시크릿 창·주소를 믿을 수 없는 브라우저)의 실제 주소. url 은 nil 로 두어 화면·고양이 쪽으로 새지 않게 하고, 기록에만 쓴다.
+    var hiddenURL: String?
 
-    var blocked: Bool { !ready || appBlocked || urlBlocked || incognito || urlUnknown }
+    /// 민감한 곳: 막는 사이트·시크릿 창·주소를 모르거나 믿을 수 없는 브라우저
+    var sensitivePlace: Bool { urlBlocked || incognito || urlUnknown }
+    /// 내용을 아예 남기지 않는 곳: 앞 앱을 아직 모름, 비밀번호 관리자처럼 막는 앱 (fail-closed).
+    /// config.json recordSensitive 가 꺼져 있으면(기본) 민감한 곳도 여기에 든다.
+    var locked: Bool { !ready || appBlocked || (sensitivePlace && !Privacy.config.recordSensitive) }
+    /// 내용은 기록하되 privacy=sensitive 를 붙이는 곳 (recordSensitive 를 켰을 때만). brain·고양이는 이 기록을 AI(Codex·Grok Bot)로 보내지 않는다.
+    var sensitive: Bool { !locked && sensitivePlace }
+    /// 화면·고양이 쪽에서 감출 곳 (locked + sensitive). 기록 여부는 locked 로 판단한다.
+    var blocked: Bool { !ready || appBlocked || sensitivePlace }
 }
 
 final class Context {
@@ -72,6 +82,9 @@ struct Config: Codable {
     /// brain.db 의 구간 요약(입력 글·질문이 들어 있음)도 contentRetentionDays 가 지나면 비운다.
     var contentRetentionDays = 30
     var retentionDays = 180
+    /// 은행·결제·정부 사이트, 시크릿 창, 주소를 모르는 브라우저에서도 내용을 기록할지. 켜면 privacy=sensitive 로 남기고
+    /// brain·고양이가 AI(Codex·Grok Bot)로는 보내지 않는다. 끄면(기본) 시간·앱만 남긴다. 비밀번호 관리자 앱은 어느 쪽이든 막는다.
+    var recordSensitive = false
     /// 지우기 전에 보관할 곳 ("ssh호스트:경로", brain/archive.py 가 sftp로 올린다). 있으면 보관이 끝난 시각(archive.json)까지만 지운다.
     var archiveTo: String? = nil
 
@@ -108,6 +121,7 @@ struct Config: Codable {
         contentRetentionDays = try c.decodeIfPresent(Int.self, forKey: .contentRetentionDays) ?? d.contentRetentionDays
         retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? d.retentionDays
         archiveTo = try c.decodeIfPresent(String.self, forKey: .archiveTo)
+        recordSensitive = try c.decodeIfPresent(Bool.self, forKey: .recordSensitive) ?? d.recordSensitive
     }
 
     static func load(dir: URL) -> Config {

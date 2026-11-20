@@ -17,6 +17,8 @@ final class AIResponseCapture {
         let appName: String?
         let url: String?
         let window: String?
+        /// 질문을 민감한 곳(시크릿 창 등)에서 보냈다: 답변도 민감 표시
+        let sensitive: Bool
         var webArea: AXUIElement?
         let before: String
         let startedAt: Date
@@ -28,12 +30,12 @@ final class AIResponseCapture {
     init(store: Store) { self.store = store }
 
     func start(prompt: String, ai: String, pid: pid_t, bundle: String?, appName: String?,
-               webArea: AXUIElement?, url: String?, window: String?) {
+               webArea: AXUIElement?, url: String?, window: String?, sensitive: Bool = false) {
         if job != nil { finish(partial: true) }   // 이전 답변을 기다리던 중이면 지금까지 것으로 마감
         let web = webArea ?? AIResponseCapture.findWebArea(pid: pid)
         let (text, method) = web.flatMap { AIResponseCapture.pageText($0) } ?? ("", "none")
         job = Job(prompt: prompt, ai: ai, pid: pid, bundle: bundle, appName: appName, url: url, window: window,
-                  webArea: web, before: text, startedAt: Date(), last: text, lastChange: Date(), method: method)
+                  sensitive: sensitive, webArea: web, before: text, startedAt: Date(), last: text, lastChange: Date(), method: method)
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.poll() }
     }
@@ -85,15 +87,16 @@ final class AIResponseCapture {
         payload["text"] = redacted
         var e = Event("ai_response", payload: payload, privacy: (masked || promptMasked) ? "masked" : "none")
         e.app = j.appName; e.bundle = j.bundle; e.pid = j.pid; e.url = j.url; e.window = j.window
+        e.sensitive = j.sensitive
         store.write(e)
     }
 
-    /// 지금 앞 문맥이 질문을 보낸 곳과 같은지: 같은 앱, 막히지 않음, 웹이면 같은 사이트.
+    /// 지금 앞 문맥이 질문을 보낸 곳과 같은지: 같은 앱, 막는 곳 아님, 민감 여부가 같음, 웹이면 같은 사이트.
     private static func sameContext(_ j: Job) -> Bool {
         let s = Context.shared.snapshot
-        guard s.pid == j.pid, !s.blocked else { return false }
+        guard s.pid == j.pid, !s.locked, s.sensitive == j.sensitive else { return false }
         guard let start = j.url else { return true }   // 데스크톱 앱
-        guard let now = s.url, let a = URL(string: start)?.host?.lowercased(), let b = URL(string: now)?.host?.lowercased() else { return false }
+        guard let now = s.url ?? s.hiddenURL, let a = URL(string: start)?.host?.lowercased(), let b = URL(string: now)?.host?.lowercased() else { return false }
         return a == b
     }
 

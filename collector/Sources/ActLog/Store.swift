@@ -14,7 +14,9 @@ struct Event {
     var window: String?
     var url: String?
     var payload: [String: Any] = [:]
-    var privacy: String = "none"   // none | masked | blocked | secure_gap
+    var privacy: String = "none"   // none | masked | sensitive | blocked | secure_gap
+    /// 민감한 곳에서 생긴 기록. 저장할 때 privacy 를 sensitive 로 바꾼다 (가린 것은 payload.masked 로 남긴다).
+    var sensitive = false
 
     init(_ source: String, payload: [String: Any] = [:], privacy: String = "none") {
         self.source = source
@@ -22,15 +24,21 @@ struct Event {
         self.privacy = privacy
     }
 
-    /// 지금 활성 앱·창·URL 문맥을 채운다. 차단 문맥이면 창 제목·URL은 남기지 않는다.
+    /// 지금 활성 앱·창·URL 문맥을 채운다. 막는 앱이면 창 제목·URL은 남기지 않고, 민감한 곳이면 다 남기고 표시한다.
     mutating func fillContext(_ s: Snapshot = Context.shared.snapshot) {
         app = app ?? s.app
         bundle = bundle ?? s.bundle
         pid = pid ?? s.pid
-        if !s.blocked {
+        if !s.locked {
             window = window ?? s.window
-            url = url ?? s.url
+            url = url ?? s.url ?? s.hiddenURL
+            sensitive = sensitive || s.sensitive
         }
+    }
+
+    /// 저장할 privacy: 내용을 남긴 기록(none·masked)이 민감한 곳이면 sensitive
+    var storedPrivacy: String {
+        sensitive && (privacy == "none" || privacy == "masked") ? "sensitive" : privacy
     }
 }
 
@@ -82,8 +90,11 @@ final class Store {
     /// 일시정지 중이면 버린다. `force`는 일시정지/재개 표시 같은 메타 이벤트용.
     func write(_ e: Event, force: Bool = false) {
         if !force && Context.shared.snapshot.paused { return }
+        var payload = e.payload
+        if e.storedPrivacy == "sensitive" && e.privacy == "masked" { payload["masked"] = true }
+        let privacy = e.storedPrivacy
         let json: String
-        if let data = try? JSONSerialization.data(withJSONObject: e.payload, options: [.sortedKeys]),
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
            let s = String(data: data, encoding: .utf8) {
             json = s
         } else {
@@ -101,7 +112,7 @@ final class Store {
             bindText(st, 7, e.window)
             bindText(st, 8, e.url)
             bindText(st, 9, json)
-            bindText(st, 10, e.privacy)
+            bindText(st, 10, privacy)
             if sqlite3_step(st) != SQLITE_DONE {
                 Log.write("insert 실패: \(String(cString: sqlite3_errmsg(db)))")
             } else {

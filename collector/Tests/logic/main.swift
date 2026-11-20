@@ -755,6 +755,28 @@ do {
 // MARK: 준비 전·보존 기간
 do {
     check("앞 앱을 읽기 전에는 막힘", Snapshot().blocked && !Snapshot(ready: true).blocked)
+    // 기본(recordSensitive 꺼짐): 민감한 곳도 예전처럼 내용 안 남김
+    check("기본은 민감한 곳도 잠김", Snapshot(urlBlocked: true, ready: true).locked && !Snapshot(urlBlocked: true, ready: true).sensitive
+          && Config().recordSensitive == false)
+    let savedConfig = Privacy.config
+    Privacy.config.recordSensitive = true
+    defer { Privacy.config = savedConfig }
+    // 켜면: 막는 앱(비밀번호 관리자)·앞 앱 모름 = 내용 안 남김. 막는 사이트·시크릿 창·주소 모름 = 남기고 민감 표시
+    let bank = Snapshot(app: "Chrome", window: "KB 계좌조회", appBlocked: false, urlBlocked: true, ready: true, hiddenURL: "https://kbstar.com/a")
+    check("막는 사이트는 민감 (내용은 남김)", bank.sensitive && !bank.locked && bank.blocked)
+    check("비밀번호 앱은 잠김", Snapshot(appBlocked: true, ready: true).locked && !Snapshot(appBlocked: true, ready: true).sensitive)
+    check("시크릿 창·주소 모름도 민감", Snapshot(incognito: true, ready: true).sensitive && Snapshot(urlUnknown: true, ready: true).sensitive)
+    check("앞 앱 모르면 잠김 (민감 아님)", Snapshot(urlBlocked: true).locked && !Snapshot(urlBlocked: true).sensitive)
+    var be = Event("text"); be.fillContext(bank)
+    check("민감한 곳 기록: 창 제목·숨긴 주소 채우고 표시", be.window == "KB 계좌조회" && be.url == "https://kbstar.com/a" && be.storedPrivacy == "sensitive")
+    be.privacy = "masked"
+    check("가린 것도 민감이면 sensitive", be.storedPrivacy == "sensitive")
+    var le = Event("text"); le.fillContext(Snapshot(app: "1Password", window: "Vault", appBlocked: true, ready: true))
+    check("잠긴 곳 기록: 창 제목 없음", le.window == nil && le.storedPrivacy == "none" && le.app == "1Password")
+    var ne = Event("text"); ne.fillContext(Snapshot(app: "Xcode", window: "a.swift", url: nil, ready: true))
+    check("보통 기록은 그대로", ne.window == "a.swift" && ne.storedPrivacy == "none")
+    var bl = Event("paste", privacy: "blocked"); bl.sensitive = true
+    check("blocked 는 민감보다 셈", bl.storedPrivacy == "blocked")
     let old = try! JSONDecoder().decode(Config.self, from: Data("{\"captureClipboard\": true}".utf8))
     check("보존 기간 기본값 (예전 config.json)", old.contentRetentionDays == 30 && old.retentionDays == 180)
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("actlog-purge-\(getpid())")

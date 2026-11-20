@@ -16,6 +16,7 @@ final class TextCapture {
     private var placeholder: String?
     private var isAIField = false
     private var pastedChars = 0
+    private var pastedPrivacy = "none"   // 이번 조각에 붙여넣은 것 중 가장 센 표시 (none < sensitive < blocked)
     private var baseline = ""
     private var latest = ""
     private var keysSinceCommit = 0
@@ -64,8 +65,10 @@ final class TextCapture {
         self.role = role
         fieldLabel = AX.label(f)
         placeholder = AX.string(f, "AXPlaceholderValue")
-        isAIField = Privacy.aiChat(url: Context.shared.snapshot.url, bundle: bundle) != nil
+        let snap = Context.shared.snapshot
+        isAIField = Privacy.aiChat(url: snap.url ?? snap.hiddenURL, bundle: bundle) != nil
         pastedChars = 0
+        pastedPrivacy = "none"
         let v = readValue()
         baseline = v ?? ""
         latest = baseline
@@ -146,9 +149,11 @@ final class TextCapture {
     }
 
     /// Cmd+V: 이번 입력 조각에 붙여넣은 글이 섞여 있다고 표시하기 위해.
-    func notePaste(chars: Int) {
+    func notePaste(chars: Int, privacy: String = "none") {
         guard element != nil else { return }
         pastedChars += chars
+        // 막힌 곳(비밀번호 관리자 등)에서 복사한 걸 붙여넣었으면 이번 조각은 내용을 남기지 않고, 민감한 곳 것이면 민감 표시
+        if privacy == "blocked" || (privacy == "sensitive" && pastedPrivacy != "blocked") { pastedPrivacy = privacy }
         keysSinceCommit += 1
         if startedAt == nil { startedAt = Date().timeIntervalSince1970 }
     }
@@ -165,7 +170,9 @@ final class TextCapture {
         let keys = keysSinceCommit
         let started = startedAt
         let pasted = pastedChars
+        let pastedFrom = pastedPrivacy
         pastedChars = 0
+        pastedPrivacy = "none"
         keysSinceCommit = 0
         startedAt = nil
 
@@ -193,7 +200,8 @@ final class TextCapture {
         if pasted > 0 { payload["pasted_chars"] = pasted }
         payload["deleted"] = deleted
 
-        if Context.shared.snapshot.blocked || Privacy.isBlocked(bundle: bundle) {
+        if Context.shared.snapshot.locked || Privacy.isBlocked(bundle: bundle) || pastedFrom == "blocked" {
+            if pastedFrom == "blocked" { payload["copied_from"] = "blocked" }
             payload["chars"] = trimmed.count
             e.payload = payload
             e.privacy = "blocked"
@@ -204,6 +212,7 @@ final class TextCapture {
         let (redacted, masked) = Privacy.redact(trimmed, limit: Privacy.config.maxTextChars)
         payload["text"] = redacted
         payload["chars"] = trimmed.count
+        if pastedFrom == "sensitive" { e.sensitive = true }
         let ai = Privacy.aiChat(url: e.url, bundle: e.bundle)
         if let ai {
             payload["kind"] = "ai_prompt"
@@ -218,7 +227,8 @@ final class TextCapture {
            Privacy.config.aiResponsesFromDesktopApps || Privacy.aiDesktopApps[bundle ?? ""] == nil,
            let element {
             aiResponses?.start(prompt: trimmed, ai: ai, pid: pid, bundle: bundle, appName: appName,
-                               webArea: AIResponseCapture.webArea(containing: element), url: e.url, window: e.window)
+                               webArea: AIResponseCapture.webArea(containing: element), url: e.url, window: e.window,
+                               sensitive: e.sensitive)
         }
     }
 

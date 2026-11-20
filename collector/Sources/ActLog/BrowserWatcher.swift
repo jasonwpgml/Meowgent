@@ -84,7 +84,7 @@ final class BrowserWatcher {
             apply(bundle: bundle, result)
         } else {
             // 못 읽었으면 모르는 상태로 둔다 (내용 기록 안 함)
-            Context.shared.update { if $0.bundle == bundle { $0.url = nil; $0.urlUnknown = true } }
+            Context.shared.update { if $0.bundle == bundle { $0.url = nil; $0.hiddenURL = nil; $0.urlUnknown = true } }
         }
         if let p = pending { pending = nil; DispatchQueue.main.async { self.refresh(bundle: p) } }
     }
@@ -124,22 +124,28 @@ final class BrowserWatcher {
         let hidden = r.incognito || unverified
         Context.shared.update {
             $0.url = (blocked || hidden) ? nil : r.url
+            $0.hiddenURL = (blocked || hidden) ? r.url : nil
             $0.urlBlocked = blocked
             $0.incognito = r.incognito
             $0.urlUnknown = unverified
         }
         let reason = r.incognito ? "incognito" : (unverified ? "safari_unverified" : "blocked_domain")
-        let key = hidden ? reason : (blocked ? "blocked:" + (URL(string: r.url)?.host ?? "") : r.url)
+        // recordSensitive 를 켰으면 민감한 곳(막는 사이트·시크릿 창·믿을 수 없는 Safari)도 주소·제목을 남기고 privacy=sensitive 로 표시한다 (fillContext).
+        // 안 켰으면(기본) 예전처럼 이유만, 같은 곳(시크릿·사이트)이 이어지면 한 번만 남긴다
+        let locked = Context.shared.snapshot.locked
+        let key = locked ? (hidden ? reason : (blocked ? "blocked:" + (URL(string: r.url)?.host ?? "") : r.url))
+            : (hidden || blocked ? reason + ":" : "") + r.url
         guard key != lastURL else { return }
         lastURL = key
 
-        if hidden || blocked {
+        if locked {
             var e = Event("browser", payload: ["reason": reason], privacy: "blocked")
             e.fillContext()
             store.write(e)
             return
         }
         var e = Event("browser", payload: ["title": r.title])
+        if hidden || blocked { e.payload["reason"] = reason }
         e.fillContext()
         e.url = r.url
         store.write(e)

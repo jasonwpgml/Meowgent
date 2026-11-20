@@ -102,6 +102,28 @@ b.ask_unclear(now + 61)
 check("답은 labels 로", b.db.execute("SELECT answer FROM labels WHERE episode_id=1").fetchall() == [("meowgent",)])
 check("답한 구간은 다시 안 묻는다", not (B.INBOX / "brain-ep-1.json").exists())
 
+# 민감한 곳: 구간에 표시가 남고, inbox 질문(Grok Bot 으로도 감)에는 내용을 안 넣는다
+seg = B.Segment(("bank", "kbstar.com"), "Chrome", CH, 100.0)
+seg.add((1, 100.0, "browser", "Chrome", CH, "KB 계좌조회", "https://kbstar.com/x", {"title": "KB 계좌조회"}))
+check("보통 기록이면 민감 아님", not seg.sensitive)
+seg.add((2, 110.0, "text", "Chrome", CH, "KB 계좌조회", "https://kbstar.com/x", {"text": "계좌번호 메모"}, "sensitive"))
+check("민감 기록이 섞이면 구간도 민감", seg.sensitive)
+other = B.Segment(("x", None), "Notes", "com.apple.Notes", 90.0)
+other.absorb(seg)
+check("잠깐 들른 민감 구간을 흡수하면 민감", other.sensitive)
+seg.row = None
+row = b._save(seg, "closed") if hasattr(b, "_prev_line") else None
+check("brain.db 에 sensitive 저장", b.db.execute("SELECT sensitive FROM episodes WHERE id=?", (row,)).fetchone() == (1,))
+b.db.execute("INSERT INTO episodes(id,start,end,status,app,title,summary,summary_hash,judged_hash,sensitive) VALUES(70,?,?,'closed','Chrome','KB 계좌조회',?,'h','h',1)",
+             (now - 3600, now - 3600 + 1500, json.dumps({"입력한 글": {"예시": ["계좌번호 메모"]}})))
+b.db.execute("INSERT INTO decisions VALUES(70,?,?,?,?,?,?,?,?)", (B.QSET, "project", "none", 0.1, "{}", now, 0, 1))
+for f in B.INBOX.glob("brain-ep-*.json"):
+    f.unlink()
+b.next_ask = 0
+b.ask_unclear(now + 120)
+q = json.loads((B.INBOX / "brain-ep-70.json").read_text())
+check("민감 구간 질문에는 창 제목·입력 글 없음", "KB" not in json.dumps(q, ensure_ascii=False) and "계좌번호" not in q["detail"], q["detail"])
+
 # 보존 기간
 b.wiki = B.INBOX.parent / "wiki"
 (b.wiki / "timeline").mkdir(parents=True)

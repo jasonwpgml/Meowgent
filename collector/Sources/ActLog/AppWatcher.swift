@@ -53,7 +53,7 @@ final class AppWatcher {
 
         Context.shared.update {
             $0.app = name; $0.bundle = bundle; $0.pid = pid
-            $0.window = nil; $0.url = nil
+            $0.window = nil; $0.url = nil; $0.hiddenURL = nil
             $0.appBlocked = blocked; $0.urlBlocked = false; $0.incognito = false
             // 목록 밖 브라우저(Firefox 등)는 주소를 읽을 방법이 없어 늘 모르는 상태 = 막힘
             $0.urlUnknown = BrowserWatcher.isBrowser(bundle) || BrowserWatcher.isOtherBrowser(bundle)
@@ -139,13 +139,13 @@ final class AppWatcher {
             lastWindowKey = key
             Context.shared.update {
                 $0.window = title.isEmpty ? nil : title
-                if browserBundle != nil { $0.url = nil; $0.urlUnknown = true }
+                if browserBundle != nil { $0.url = nil; $0.hiddenURL = nil; $0.urlUnknown = true }
             }
             // 브라우저는 새 주소를 먼저 읽고 나서 창 기록을 남긴다 (못 읽으면 모르는 상태 = 막힘으로 남는다)
             if let b = browserBundle { browser.refresh(bundle: b) }
             let s = Context.shared.snapshot
-            var e = Event("window", privacy: s.blocked ? "blocked" : "none")
-            if let doc, !s.blocked { e.payload["document"] = Privacy.sanitize(url: doc) ?? doc }
+            var e = Event("window", privacy: s.locked ? "blocked" : "none")
+            if let doc, !s.locked { e.payload["document"] = Privacy.sanitize(url: doc) ?? doc }
             e.fillContext(s)
             store.write(e)
         } else if let b = browserBundle {

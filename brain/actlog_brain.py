@@ -207,10 +207,13 @@ class Segment:
         self.scrolls = 0
         self.brief = []           # 잠깐 들른 곳 [(app, 초)]
         self.switches = 0
+        self.sensitive = False    # 민감한 곳(막는 사이트·시크릿 창 등) 기록이 섞임 → 고양이·inbox 로 내용을 안 보낸다
         self.row = None           # brain.db 의 episodes.id
 
     def add(self, ev):
-        eid, ts, source, app, bundle, window, url, p = ev
+        eid, ts, source, app, bundle, window, url, p, *rest = ev
+        if rest and rest[0] == "sensitive":
+            self.sensitive = True
         self.end = max(self.end, ts)
         self.first_id = self.first_id or eid
         self.last_id = eid
@@ -239,6 +242,7 @@ class Segment:
         """잠깐 들렀다 돌아온 구간을 흡수 (내용은 합치고 '잠깐 들른 곳'으로 표시)."""
         self.brief.append((other.app, int(other.end - other.start) or 1))
         self.switches += 1
+        self.sensitive = self.sensitive or other.sensitive
         self.end = max(self.end, other.end)
         self.last_id = other.last_id or self.last_id
         self.searches += other.searches
@@ -356,7 +360,7 @@ class Segmenter:
             self.ep = Segment(old.ctx, old.app, old.bundle, old.end)
 
     def feed(self, ev):
-        eid, ts, source, app, bundle, window, url, p = ev
+        eid, ts, source, app, bundle, window, url, p, *_ = ev
         self.tick(ts)
 
         # 자리 비움 / 잠금 / 잠자기 → 구간 닫기
@@ -460,7 +464,8 @@ CREATE TABLE IF NOT EXISTS episodes (
   id INTEGER PRIMARY KEY, start REAL, end REAL, status TEXT,
   app TEXT, bundle TEXT, ctx TEXT, title TEXT,
   first_event INTEGER, last_event INTEGER,
-  summary TEXT, summary_hash TEXT, judged_hash TEXT, judged_at REAL
+  summary TEXT, summary_hash TEXT, judged_hash TEXT, judged_at REAL,
+  sensitive INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS episodes_start ON episodes(start);
 CREATE TABLE IF NOT EXISTS decisions (
@@ -472,6 +477,14 @@ CREATE TABLE IF NOT EXISTS labels (episode_id INTEGER, question TEXT, answer TEX
 """
 
 
+def migrate(db):
+    """예전 brain.db 에 없는 열을 더한다. sensitive: 민감한 곳 기록이 섞인 구간 (고양이·inbox 로 내용을 안 보낸다)"""
+    cols = {r[1] for r in db.execute("PRAGMA table_info(episodes)")}
+    if "sensitive" not in cols:
+        db.execute("ALTER TABLE episodes ADD COLUMN sensitive INTEGER NOT NULL DEFAULT 0")
+        db.commit()
+
+
 class Brain:
     def __init__(self):
         self.cfg = load_json(CONFIG, DEFAULT_CONFIG)
@@ -480,6 +493,7 @@ class Brain:
         self.clef = Clef(self.cfg["clef_url"])
         self.db = sqlite3.connect(BRAIN_DB)
         self.db.executescript(SCHEMA)
+        migrate(self.db)
         os.chmod(BRAIN_DB, 0o600)
         self.ev = sqlite3.connect(f"file:{EVENTS_DB}?mode=ro", uri=True, timeout=5)
         self.seg = Segmenter(self.cfg, self._closed)
@@ -525,12 +539,12 @@ class Brain:
         js = json.dumps(state, ensure_ascii=False)
         h = hashlib.sha1(js.encode()).hexdigest()[:16]
         vals = (seg.start, seg.end, status, seg.app, seg.bundle, json.dumps(seg.ctx, ensure_ascii=False),
-                clip(seg.last_title, 200), seg.first_id, seg.last_id, js, h)
+                clip(seg.last_title, 200), seg.first_id, seg.last_id, js, h, int(seg.sensitive))
         if row_id:
-            self.db.execute("UPDATE episodes SET start=?,end=?,status=?,app=?,bundle=?,ctx=?,title=?,first_event=?,last_event=?,summary=?,summary_hash=? WHERE id=?",
+            self.db.execute("UPDATE episodes SET start=?,end=?,status=?,app=?,bundle=?,ctx=?,title=?,first_event=?,last_event=?,summary=?,summary_hash=?,sensitive=? WHERE id=?",
                             (*vals, row_id))
             return row_id
-        cur = self.db.execute("INSERT INTO episodes(start,end,status,app,bundle,ctx,title,first_event,last_event,summary,summary_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?)", vals)
+        cur = self.db.execute("INSERT INTO episodes(start,end,status,app,bundle,ctx,title,first_event,last_event,summary,summary_hash,sensitive) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", vals)
         return cur.lastrowid
 
     def _closed(self, seg):
@@ -555,14 +569,14 @@ class Brain:
             cursor = (r[0] or 1) - 1
         cursor = int(cursor)
         rows = self.ev.execute(
-            "SELECT id, ts, source, app, bundle, window, url, payload FROM events WHERE id > ? ORDER BY id LIMIT ?",
+            "SELECT id, ts, source, app, bundle, window, url, payload, privacy FROM events WHERE id > ? ORDER BY id LIMIT ?",
             (cursor, limit)).fetchall()
         for row in rows:
             try:
                 p = json.loads(row[7] or "{}")
             except json.JSONDecodeError:
                 p = {}
-            self.seg.feed((*row[:7], p))
+            self.seg.feed((*row[:7], p, row[8]))
             cursor = row[0]
         if rows:
             self.put("cursor", cursor)
@@ -635,7 +649,7 @@ class Brain:
         if open_asks >= self.cfg["ask_open_max"]:
             return
         rows = self.db.execute(
-            "SELECT e.id, e.start, e.end, e.app, e.title, e.summary FROM episodes e "
+            "SELECT e.id, e.start, e.end, e.app, e.title, e.summary, e.sensitive FROM episodes e "
             "JOIN decisions d ON d.episode_id=e.id AND d.qset=? AND d.question='project' "
             "WHERE e.status='closed' AND e.judged_hash = e.summary_hash AND e.end - e.start >= ? AND e.start > ? "
             "AND (d.confidence < ? OR d.answer = 'other') "
@@ -644,7 +658,7 @@ class Brain:
             (QSET, self.cfg["ask_min_s"], now - 3 * 86400, self.cfg["guess"])).fetchall()
         choices = [{"id": k, "label": v.split(":")[0].strip()} for k, v in sorted(self.projects.items())]
         choices += [{"id": "none", "label": "개인 용무·휴식"}, {"id": "other", "label": "목록에 없는 새 작업"}]
-        for eid, st, en, app, title, summary in rows:
+        for eid, st, en, app, title, summary, sensitive in rows:
             if open_asks >= self.cfg["ask_open_max"]:
                 break
             name = f"brain-ep-{eid}.json"
@@ -653,6 +667,8 @@ class Brain:
             summ = json.loads(summary or "{}")
             hint = (summ.get("AI에게 한 질문") or summ.get("검색어") or summ.get("입력한 글", {}).get("예시") or [None])[-1]
             detail = " · ".join(x for x in [clip(title, 60) if title and title != app else None, clip(hint, 120) if hint else None] if x)
+            if sensitive:   # inbox 질문은 Grok Bot 으로도 넘어갈 수 있다: 민감한 곳 내용은 빼고 묻는다
+                detail = "민감한 곳(은행·시크릿 창 등)이 섞인 구간이라 내용은 안 보여 준다"
             t0 = datetime.fromtimestamp(st)
             item = {
                 "id": name[:-5], "kind": "ask", "level": "yellow", "source": "brain", "episode_id": eid,

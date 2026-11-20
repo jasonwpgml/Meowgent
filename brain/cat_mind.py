@@ -311,18 +311,24 @@ class Situation:
         return sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=2)
 
     def episodes(self, since, limit=8):
-        """[(id, start, end, status, app, title, summary, {질문: (답, 신뢰도)})] 최근 것부터"""
+        """[(id, start, end, status, app, title, summary, {질문: (답, 신뢰도)})] 최근 것부터.
+        민감한 곳(은행·시크릿 창 등)이 섞인 구간은 창 제목·요약을 비운다: 여기서 나간 것은 Codex 프롬프트에 들어간다"""
         db = self._db()
         if not db:
             return []
         try:
-            rows = db.execute("SELECT id, start, end, status, app, title, summary FROM episodes WHERE end >= ? "
+            cols = {r[1] for r in db.execute("PRAGMA table_info(episodes)")}
+            sens = "sensitive" if "sensitive" in cols else "0"
+            rows = db.execute(f"SELECT id, start, end, status, app, title, summary, {sens} FROM episodes WHERE end >= ? "
                               "ORDER BY start DESC LIMIT ?", (since, limit)).fetchall()
             out = []
             for r in rows:
                 d = {q: (a, c) for q, a, c in db.execute(
                     "SELECT question, answer, confidence FROM decisions WHERE episode_id=?", (r[0],))}
-                out.append((*r[:6], read_summary(r[6]), d))
+                if r[7]:
+                    out.append((*r[:5], None, {"민감한 곳": True}, d))
+                else:
+                    out.append((*r[:6], read_summary(r[6]), d))
             return out
         except sqlite3.Error as e:
             log(f"brain.db 읽기 실패: {e}")
@@ -373,6 +379,8 @@ def describe(ep, share, projects):
         for k in ("AI에게 한 질문", "검색어"):
             if summ.get(k):
                 parts.append(f"{k} '{clip(summ[k][-1], 100)}'")
+    if summ.get("민감한 곳"):
+        parts.append("민감한 곳(내용 숨김)")
     if yes(d, "stuck", 0.5):
         parts.append("막힘 신호")
     return " · ".join(parts)
@@ -1200,19 +1208,20 @@ class Mind:
                 self.st["afk_cursor"] = db.execute("SELECT coalesce(min(id),1)-1 FROM events WHERE ts >= ?",
                                                    (self.st["active_since"],)).fetchone()[0]
             # 자리 비움만이 아니라 모든 기록의 시각을 본다: 기록이 끊긴 구간(앱이 꺼졌거나 맥이 잠든 동안)도 쉰 것으로 치려고
-            rows = db.execute("SELECT id, ts, source, payload FROM events WHERE id > ? ORDER BY id",
+            priv = "privacy" if any(r[1] == "privacy" for r in db.execute("PRAGMA table_info(events)")) else "'none'"
+            rows = db.execute(f"SELECT id, ts, source, payload, {priv} FROM events WHERE id > ? ORDER BY id",
                               (self.st["afk_cursor"],)).fetchall()
             top = db.execute("SELECT coalesce(max(id),0) FROM events").fetchone()[0]
             db.close()
         except sqlite3.Error as e:
             log(f"actlog.db 읽기 실패: {e}")
             return
-        for _, ts, source, payload in rows:
+        for _, ts, source, payload, privacy in rows:
             self.on_gap(self.st.get("last_event_ts"), ts)
             self.st["last_event_ts"] = ts
             if source == "afk":
                 self.on_afk(ts, read_json_str(payload).get("status") == "afk")
-            elif source == "text":
+            elif source == "text" and privacy not in ("sensitive", "blocked"):   # 민감한 곳 질문은 제안·고양이 말(Codex)로 안 보낸다
                 o = read_json_str(payload)
                 if o.get("kind") == "ai_prompt" and o.get("reason") == "enter" and str(o.get("text", "")).strip():
                     self.on_prompt(ts, o.get("ai") or "ai", str(o["text"]).strip())

@@ -110,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         tap.onPaste = { [weak self] in
             guard let self else { return }
             let r = self.system.recordPaste(field: self.text.currentField, secure: self.text.secureFocus)
-            self.text.notePaste(chars: r.chars)
+            self.text.notePaste(chars: r.chars, privacy: r.privacy)
             if r.sensitive {
                 let s = Context.shared.snapshot
                 let t = "🔑 방금 붙여넣은 거에 키·토큰·카드번호 같은 게 있다냥. 꼭 확인해 봐라냥\n붙여넣은 곳: \(s.app ?? "?")\(s.url.map { " · " + (URL(string: $0)?.host ?? "") } ?? "")"

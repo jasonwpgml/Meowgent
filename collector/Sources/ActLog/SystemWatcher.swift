@@ -11,6 +11,8 @@ final class SystemWatcher {
     private var lastPasteboard = NSPasteboard.general.changeCount
     /// 막힌 곳(시크릿·은행·비밀번호 관리자 등)에서 복사된 클립보드의 changeCount. 다른 앱에 붙여넣어도 내용을 남기지 않는다.
     private var blockedCopy: Int?
+    /// 민감한 곳에서 한 복사 (붙여넣은 곳이 어디든 민감 표시)
+    private var sensitiveCopy: Int?
     var health: [String: Any] = [:]
     /// 자리를 비웠을 때 (잠금·잠자기·입력 없음) — 말풍선 반응의 '관련 행동' 판정에 쓴다
     var onAway: (() -> Void)?
@@ -93,12 +95,13 @@ final class SystemWatcher {
         var e = Event("clipboard")
         e.fillContext()
         let concealed = SystemWatcher.isConcealed(types)
-        if concealed || secureOn || Context.shared.snapshot.blocked {
+        if concealed || secureOn || Context.shared.snapshot.locked {
             blockedCopy = pb.changeCount
             e.privacy = "blocked"
             if Privacy.config.captureClipboard { store.write(e) }
             return
         }
+        if e.sensitive { sensitiveCopy = pb.changeCount }
         guard Privacy.config.captureClipboard else { return }
         guard let s = pb.string(forType: .string), !s.isEmpty else {
             e.payload = ["kind": types.contains("public.png") || types.contains("public.tiff") ? "image" : "other"]
@@ -114,7 +117,8 @@ final class SystemWatcher {
     /// Cmd+V 순간: 무엇을(클립보드 내용) 어디에(앱·창·주소·입력창) 붙여넣었나. 붙여넣은 글자 수를 돌려준다.
     @discardableResult
     /// `secure`: 포커스가 비밀번호 칸에 있다 (TextCapture.secureFocus). 그때와 보안 입력(secureOn) 중에는 내용을 남기지 않는다.
-    func recordPaste(field: (role: String, label: String?)?, secure: Bool) -> (chars: Int, sensitive: Bool) {
+    /// privacy: 이 붙여넣기의 표시 (none·sensitive·blocked). 입력 기록(TextCapture.notePaste)이 따른다.
+    func recordPaste(field: (role: String, label: String?)?, secure: Bool) -> (chars: Int, sensitive: Bool, privacy: String) {
         let pb = NSPasteboard.general
         let types = pb.types?.map(\.rawValue) ?? []
         var e = Event("paste")
@@ -124,19 +128,24 @@ final class SystemWatcher {
         checkClipboard()   // 아직 못 본 복사면 지금 판정 (복사하고 1초 안에 붙여넣은 경우)
         let concealed = SystemWatcher.isConcealed(types)
         let fromBlocked = blockedCopy == pb.changeCount
-        if concealed || fromBlocked || secure || secureOn || Context.shared.snapshot.blocked {
-            if fromBlocked { payload["copied_from"] = "blocked" }
+        if concealed || fromBlocked || secure || secureOn || Context.shared.snapshot.locked {
+            if fromBlocked || concealed { payload["copied_from"] = "blocked" }
             e.privacy = "blocked"
             e.payload = payload
             store.write(e)
-            return (0, false)
+            return (0, false, "blocked")
         }
+        if sensitiveCopy == pb.changeCount {
+            e.sensitive = true
+            payload["copied_from"] = "sensitive"
+        }
+        let tag = e.sensitive ? "sensitive" : "none"
         guard let s = pb.string(forType: .string), !s.isEmpty else {
             payload["kind"] = types.contains("public.png") || types.contains("public.tiff") ? "image"
                 : (types.contains("public.file-url") ? "file" : "other")
             e.payload = payload
             store.write(e)
-            return (0, false)
+            return (0, false, tag)
         }
         let (redacted, masked) = Privacy.redact(s, limit: Privacy.config.maxClipboardChars)
         payload["kind"] = "text"
@@ -146,7 +155,7 @@ final class SystemWatcher {
         e.payload = payload
         if masked { e.privacy = "masked" }
         store.write(e)
-        return (s.count, masked)
+        return (s.count, masked, tag)
     }
 
     private func flushActivity() {

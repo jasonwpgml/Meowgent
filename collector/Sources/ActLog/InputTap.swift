@@ -150,7 +150,7 @@ final class ClickResolver {
             if let subrole { payload["subrole"] = subrole }
 
             let sameApp = pid != nil && pid == snap.pid
-            let blocked = Privacy.isBlocked(bundle: e.bundle) || (sameApp && snap.blocked)
+            let blocked = Privacy.isBlocked(bundle: e.bundle) || (sameApp && snap.locked)
             if blocked {
                 e.privacy = "blocked"
             } else if AX.isSecure(role: role, subrole: subrole) {
@@ -160,7 +160,7 @@ final class ClickResolver {
                 let deep = target != nil && !["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXRow", "AXCell"].contains(role)
                 if let label = AX.label(t, deep: deep) { payload["label"] = Privacy.redact(label).0 }
                 if let id = AX.string(t, kAXIdentifierAttribute), !id.isEmpty { payload["id"] = AX.clip(id, 80) }
-                if sameApp { e.window = snap.window; e.url = snap.url }
+                if sameApp { e.window = snap.window; e.url = snap.url ?? snap.hiddenURL; e.sensitive = snap.sensitive }
                 if button == "left", let onShortcutClick {
                     onShortcutClick(shortcutClick(t, role: role, subrole: subrole, label: payload["label"] as? String, bundle: e.bundle), pid)
                 }
