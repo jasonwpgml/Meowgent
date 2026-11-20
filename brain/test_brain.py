@@ -111,6 +111,13 @@ check("민감 기록이 섞이면 구간도 민감", seg.sensitive)
 other = B.Segment(("x", None), "Notes", "com.apple.Notes", 90.0)
 other.absorb(seg)
 check("잠깐 들른 민감 구간을 흡수하면 민감", other.sensitive)
+sg = B.Segmenter({**CFG, "max_episode_s": 60}, lambda x: None)
+sg.feed((1, 0.0, "browser", "Chrome", CH, "KB", "https://kbstar.com/x", {"title": "KB"}, "sensitive"))
+sg.feed((2, 70.0, "activity", "Chrome", CH, None, None, {"keys": 1}))
+check("길어서 나눈 다음 구간도 민감", sg.ep.sensitive)
+sg.feed((3, 80.0, "afk", None, None, None, None, {"status": "afk"}))
+sg.feed((4, 900.0, "click", "Chrome", CH, None, None, {"role": "AXButton"}))
+check("자리 비움 뒤 같은 곳에서 다시 시작해도 민감", sg.ep is not None and sg.ep.sensitive)
 seg.row = None
 row = b._save(seg, "closed") if hasattr(b, "_prev_line") else None
 check("brain.db 에 sensitive 저장", b.db.execute("SELECT sensitive FROM episodes WHERE id=?", (row,)).fetchone() == (1,))

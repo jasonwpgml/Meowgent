@@ -315,7 +315,7 @@ class Segmenter:
         self.on_close = on_close
         self.ep = None        # 현재 에피소드
         self.pending = None   # 막 넘어간 다른 맥락 (아직 switch_min_s 안 됨)
-        self.fg = None        # 지금 앞에 있는 맥락 (ctx, app, bundle)
+        self.fg = None        # 지금 앞에 있는 맥락 (ctx, app, bundle, 민감한 곳인지)
         self.fg_url = {}      # 브라우저별 마지막 사이트
         self.afk = False
 
@@ -358,9 +358,10 @@ class Segmenter:
             old = self.ep
             self.on_close(old)
             self.ep = Segment(old.ctx, old.app, old.bundle, old.end)
+            self.ep.sensitive = old.sensitive   # 같은 곳이 이어지는 것: 사이트(ctx)가 그대로 넘어가므로 표시도 넘긴다
 
     def feed(self, ev):
-        eid, ts, source, app, bundle, window, url, p, *_ = ev
+        eid, ts, source, app, bundle, window, url, p, *rest = ev
         self.tick(ts)
 
         # 자리 비움 / 잠금 / 잠자기 → 구간 닫기
@@ -380,7 +381,7 @@ class Segmenter:
         is_ctx_event = source in ("app", "window", "browser") and bundle and bundle not in IGNORE_CTX
         if is_ctx_event:
             ctx = self._ctx_of(source, app, bundle, window, url)
-            self.fg = (ctx, app, bundle)
+            self.fg = (ctx, app, bundle, bool(rest) and rest[0] == "sensitive")
             self.afk = False
             if self.ep is None:
                 self.ep = Segment(ctx, app, bundle, ts)
@@ -398,8 +399,9 @@ class Segmenter:
             if source in ("activity",) or bundle in IGNORE_CTX or not self.fg:
                 return
             # 자리 비움 뒤 같은 앱에서 다시 시작
-            ctx, fapp, fbundle = self.fg
+            ctx, fapp, fbundle, fsens = self.fg
             self.ep = Segment(ctx, fapp, fbundle, ts)
+            self.ep.sensitive = fsens   # 자리 비움 뒤 같은 곳: 사이트(ctx)를 이어받으므로 민감 표시도
 
         target = self.pending or self.ep
         if target is not None:
@@ -734,9 +736,12 @@ class Brain:
         self.dirty = False
         now = datetime.now()
         day0 = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-        eps = self.db.execute("SELECT id, start, end, status, app, title, summary FROM episodes WHERE end >= ? ORDER BY start", (day0,)).fetchall()
+        eps = self.db.execute("SELECT id, start, end, status, app, title, summary, sensitive FROM episodes WHERE end >= ? ORDER BY start", (day0,)).fetchall()
         rows = []
-        for eid, st, en, status, app, title, summary in eps:
+        for eid, st, en, status, app, title, summary, sensitive in eps:
+            # now.md·타임라인은 에이전트가 읽는 곳이라 민감한 곳 구간은 앱 이름만 (원본은 brain.db·보관본에 있다)
+            if sensitive:
+                title, summary = "민감한 곳(내용 숨김)", "{}"
             rows.append((eid, st, en, status, app, title, json.loads(summary or "{}"), self.decisions(eid)))
 
         # 프로젝트·활동별 오늘 누적 (추정 이상만)
