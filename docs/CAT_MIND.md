@@ -357,6 +357,7 @@ cat_mind가 검사하고, 앱의 정해진 코드만 실행한다. 고양이 답
    - **샌드박스**: 넷 다 `sandbox-exec`로 감싼다. Codex 자체 `workspace-write`는 쓰기만 막고 디스크 전체(데이터 폴더의 `actlog.db` 포함)를 읽을 수 있어서, 바깥 샌드박스 안에서 자체 샌드박스는 끄고 돌린다 (샌드박스는 겹쳐 걸 수 없다).
      - 쓰기: worktree(그 안의 `.git` 연결 파일은 빼고)·임시 폴더·`~/Library/Caches`·도구가 대화 기록을 남기는 폴더(Cursor `~/.cursor/projects`·`chats`, Grok `~/.grok/sessions`·`logs`, Codex `~/.codex/sessions`·`log`·`tmp`·`cache`·`shell_snapshots` 등과 바로 아래 sqlite·잠금 파일·`auth.json`, Claude는 없음)만. 저장소 `.git`(hook·설정), `~/.gitconfig`, 도구 설정·hook·플러그인·스킬·실행 파일은 못 쓴다. 밖에서 다시 돌 때 실행되는 곳이라서다.
      - 읽기: `~/.ssh`·`~/.aws`·`~/.gnupg`·`~/.config/gh`·`~/.codex*`(Codex 자신은 `~/.codex`를 읽는다) 같은 키 폴더와 Meowgent 데이터 폴더(활동 기록·대화)는 막는다. 데이터 폴더 안의 worktree와 그리로 가는 상위 폴더 목록만 연다. 저장소 코드와 나머지 파일 읽기, 인터넷(모델 API)은 막지 않는다. 키체인도 막지 않는다(도구 로그인에 쓴다).
+     - **남는 위험 (2026-11-20 사용자 결정으로 받아들임)**: Seatbelt는 도구 본체와 도구가 실행하는 명령을 가르지 못한다. 그래서 저장소에 심은 글에 속은 에이전트는 자기 로그인 정보(Codex `~/.codex/auth.json`, Cursor·Grok 설정, 키체인)를 읽어 인터넷으로 보낼 수 있다. 네 도구가 같다. 예전 Codex 자체 샌드박스는 명령의 인터넷을 막았지만 `~/.ssh`·활동 기록을 포함한 디스크 전체가 읽혔다. 비밀 폴더와 활동 기록을 막는 쪽을 골랐다. 인터넷을 모델 API로만 좁히는 건 Seatbelt가 IP·포트로만 걸러서 하지 않았다. 의심스러운 저장소는 맡기지 않는다.
      - 규칙 순서: 뒤에 온 같은 종류 규칙이 이긴다. `file-read-data`로 막은 것은 `file-read-data`로만 풀린다. 경로는 실제 경로로 풀어 쓴다(`/var` → `/private/var`).
    - **커밋 단계**(샌드박스 밖): 시작 때 기록한 git 폴더를 `GIT_DIR`·`GIT_WORK_TREE`로 못 박고, `core.hooksPath=/dev/null`·`core.fsmonitor=false`·`GIT_CONFIG_NOSYSTEM`·`--no-verify`로 돌린다. worktree의 `.git` 연결 파일이 시작 때와 다르면 커밋하지 않는다.
    - 확인 질문의 설명에 맡길 일 전체(1500자까지)를 보여 주고, 에이전트에게도 같은 글을 넘긴다.
