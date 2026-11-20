@@ -767,6 +767,8 @@ do {
     check("비밀번호 앱은 잠김", Snapshot(appBlocked: true, ready: true).locked && !Snapshot(appBlocked: true, ready: true).sensitive)
     check("시크릿 창·주소 모름도 민감", Snapshot(incognito: true, ready: true).sensitive && Snapshot(urlUnknown: true, ready: true).sensitive)
     check("앞 앱 모르면 잠김 (민감 아님)", Snapshot(urlBlocked: true).locked && !Snapshot(urlBlocked: true).sensitive)
+    check("브라우저 주소를 읽는 중이면 잠김 (민감 아님)", Snapshot(urlPending: true, ready: true).locked && !Snapshot(urlPending: true, ready: true).sensitive
+          && Snapshot(urlPending: true, ready: true).blocked)
     var be = Event("text"); be.fillContext(bank)
     check("민감한 곳 기록: 창 제목·숨긴 주소 채우고 표시", be.window == "KB 계좌조회" && be.url == "https://kbstar.com/a" && be.storedPrivacy == "sensitive")
     be.privacy = "masked"

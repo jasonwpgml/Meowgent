@@ -13,6 +13,9 @@ struct Snapshot {
     /// 브라우저가 앞에 있는데 주소를 아직(또는 영영) 못 읽은 상태: 자동화 권한 거부, 첫 응답 전, 조회 실패, 시크릿 창을 구분 못 하는 브라우저.
     /// 모르는 동안은 막힌 것으로 본다 (fail-closed).
     var urlUnknown = false
+    /// 아는 브라우저인데 지금 주소를 읽는 중이거나 못 읽은 상태 (앱·탭 전환 직후, 자동화 권한 거부, 조회 실패).
+    /// 잠깐뿐이고 어디인지 모르므로 내용은 남기지 않는다 (민감 표시로 남기면 브라우저 구간이 전부 민감이 된다).
+    var urlPending = false
     var paused = false
     /// 앞 앱을 한 번이라도 읽었는지. 손쉬운 사용 권한 전에는 앞에 무엇이 있는지 모르므로 막힌 것으로 본다 (fail-closed).
     var ready = false
@@ -21,13 +24,13 @@ struct Snapshot {
 
     /// 민감한 곳: 막는 사이트·시크릿 창·주소를 모르거나 믿을 수 없는 브라우저
     var sensitivePlace: Bool { urlBlocked || incognito || urlUnknown }
-    /// 내용을 아예 남기지 않는 곳: 앞 앱을 아직 모름, 비밀번호 관리자처럼 막는 앱 (fail-closed).
+    /// 내용을 아예 남기지 않는 곳: 앞 앱을 아직 모름, 비밀번호 관리자처럼 막는 앱, 브라우저 주소를 읽는 중 (fail-closed).
     /// config.json recordSensitive 가 꺼져 있으면(기본) 민감한 곳도 여기에 든다.
-    var locked: Bool { !ready || appBlocked || (sensitivePlace && !Privacy.config.recordSensitive) }
+    var locked: Bool { !ready || appBlocked || urlPending || (sensitivePlace && !Privacy.config.recordSensitive) }
     /// 내용은 기록하되 privacy=sensitive 를 붙이는 곳 (recordSensitive 를 켰을 때만). brain·고양이는 이 기록을 AI(Codex·Grok Bot)로 보내지 않는다.
     var sensitive: Bool { !locked && sensitivePlace }
     /// 화면·고양이 쪽에서 감출 곳 (locked + sensitive). 기록 여부는 locked 로 판단한다.
-    var blocked: Bool { !ready || appBlocked || sensitivePlace }
+    var blocked: Bool { !ready || appBlocked || urlPending || sensitivePlace }
 }
 
 final class Context {

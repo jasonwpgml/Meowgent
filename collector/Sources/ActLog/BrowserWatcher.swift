@@ -84,7 +84,7 @@ final class BrowserWatcher {
             apply(bundle: bundle, result)
         } else {
             // 못 읽었으면 모르는 상태로 둔다 (내용 기록 안 함)
-            Context.shared.update { if $0.bundle == bundle { $0.url = nil; $0.hiddenURL = nil; $0.urlUnknown = true } }
+            Context.shared.update { if $0.bundle == bundle { $0.url = nil; $0.hiddenURL = nil; $0.urlPending = true } }
         }
         if let p = pending { pending = nil; DispatchQueue.main.async { self.refresh(bundle: p) } }
     }
@@ -128,6 +128,7 @@ final class BrowserWatcher {
             $0.urlBlocked = blocked
             $0.incognito = r.incognito
             $0.urlUnknown = unverified
+            $0.urlPending = false
         }
         let reason = r.incognito ? "incognito" : (unverified ? "safari_unverified" : "blocked_domain")
         // recordSensitive 를 켰으면 민감한 곳(막는 사이트·시크릿 창·믿을 수 없는 Safari)도 주소·제목을 남기고 privacy=sensitive 로 표시한다 (fillContext).

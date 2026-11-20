@@ -56,7 +56,8 @@ final class AppWatcher {
             $0.window = nil; $0.url = nil; $0.hiddenURL = nil
             $0.appBlocked = blocked; $0.urlBlocked = false; $0.incognito = false
             // 목록 밖 브라우저(Firefox 등)는 주소를 읽을 방법이 없어 늘 모르는 상태 = 막힘
-            $0.urlUnknown = BrowserWatcher.isBrowser(bundle) || BrowserWatcher.isOtherBrowser(bundle)
+            $0.urlPending = BrowserWatcher.isBrowser(bundle)
+            $0.urlUnknown = !$0.urlPending && BrowserWatcher.isOtherBrowser(bundle)
             $0.ready = true
         }
         var e = Event("app", payload: ["event": "activate"], privacy: blocked ? "blocked" : "none")
@@ -109,7 +110,7 @@ final class AppWatcher {
             // 브라우저 제목이 바뀌면 탭이 바뀌었을 수 있다: 새 주소를 읽기 전까지는 직전 주소로 판정하지 않는다
             if browserApp {
                 beforeContextChange?()
-                Context.shared.update { if $0.pid == pid { $0.urlUnknown = true } }
+                Context.shared.update { if $0.pid == pid { $0.urlPending = true } }
             }
             // 터미널·브라우저 등은 제목이 연달아 바뀐다 → 0.4초 몰아서 처리
             titleDebounce?.invalidate()
@@ -139,7 +140,7 @@ final class AppWatcher {
             lastWindowKey = key
             Context.shared.update {
                 $0.window = title.isEmpty ? nil : title
-                if browserBundle != nil { $0.url = nil; $0.hiddenURL = nil; $0.urlUnknown = true }
+                if browserBundle != nil { $0.url = nil; $0.hiddenURL = nil; $0.urlPending = true }
             }
             // 브라우저는 새 주소를 먼저 읽고 나서 창 기록을 남긴다 (못 읽으면 모르는 상태 = 막힘으로 남는다)
             if let b = browserBundle { browser.refresh(bundle: b) }
